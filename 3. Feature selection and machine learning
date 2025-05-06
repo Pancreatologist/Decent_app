@@ -1,0 +1,1095 @@
+######一、特征选择######
+####1.boruta#####
+rm(list=ls())
+library(ggsci)
+library(here)
+library(AppliedPredictiveModeling)
+library(tidymodels)
+library(ROSE)
+library(smotefamily)
+library(themis)
+
+predictors <- readxl::read_excel('最终数据表_mice后没有肌酐没有血糖.xlsx')
+colnames(predictors)
+colnames(predictors)[28]
+colnames(predictors)[28] <- 'diagnosis'
+predictors$diagnosis <- factor(predictors$diagnosis, levels = c(0,1))
+data <- predictors[,c(28,31:82)] #分组变量放前面
+set.seed(202566)
+data_total <- data  %>%  
+  initial_split(prop = 0.8, strata = diagnosis) 
+data_train <- training(data_total) #训练集
+data_test <- testing(data_total) # 测试集
+# 计算样本权重
+positive_count <- sum(data_train$diagnosis == 1)
+negative_count <- sum(data_train$diagnosis == 0)
+scale_pos_weight <- negative_count / positive_count #3.197479
+scale_pos_weight <- positive_count / negative_count #0.3127464
+data_train$diagnosis <- as.factor(data_train$diagnosis)
+set.seed(2025)
+recipe_spec <- recipe(diagnosis ~ ., data = data_train) %>%
+  themis::step_smote(diagnosis, over_ratio = 0.5) %>%
+  step_corr(all_numeric_predictors(), 
+            threshold = 0.8,  
+            method = "pearson") %>%
+  step_normalize(all_numeric_predictors()) %>% prep()
+
+recipe_spec %>%
+  bake(new_data = NULL) %>%
+  count(diagnosis, name = "training")
+
+# 3. 将训练好的转换应用到训练集和测试集
+train_transformed <- bake(recipe_spec, new_data =NULL)
+test_transformed <- bake(recipe_spec, new_data = data_test)
+
+
+filter_variable <- colnames(train_transformed) 
+filter_variable <- c("diagnosis", filter_variable[filter_variable != "diagnosis"])
+data_train <-train_transformed[filter_variable]
+
+#测试集的
+filter_variable <- colnames(test_transformed)
+filter_variable <- c("diagnosis", filter_variable[filter_variable != "diagnosis"])
+data_test <- test_transformed[filter_variable]
+
+
+#### Boruta
+#替换为自己的数据读取
+#因子化
+str(data_train$diagnosis)
+library(Boruta)
+#pValue 指定置信水平，mcAdj=TRUE 意为将应用 Bonferroni 方法校正 p 值
+#此外还可以提供 mtry 和 ntree 参数的值，这些值将传递给随机森林函数 randomForest()
+#大部分参数使用默认值
+set.seed(202566)
+fs = Boruta(data_train[,-1],data_train$diagnosis,
+            ###通过降低pValue或增加maxRuns，可以更好的区分tentative特征###
+            pValue = 0.001,# 筛选阈值，默认0.01
+            ### 迭代最大次数,先试运行一下，如果迭代完之后，还留有变量，则下次运行，增大迭代次数。##
+            maxRuns = 1000,
+            mcAdj = TRUE, # Bonferroni方法进行多重比较校正
+            doTrace = 2,# 跟踪算法进程
+            holdHistory = TRUE, # TRUE,则将所有运行历史保存在结果的ImpHistory部分
+            ##getImp设置获取特征重要性值的方法,可以赋值为自己写的功能函数名##
+            ##需要设置优化参数,?getImpLegacyRf，查看更多参数设置注意事项##
+            getImp =getImpLegacyRfGini,
+            ##getImpRfZ()使用ranger进行随机森林分析，获得特征重要性值，默认返回mean decrease accuracy的Z-scores。##
+            ##getImpRfRaw()使用ranger进行随机森林分析,默认返回原始置换重要性结果##
+            ##getImpRfGini()使用ranger进行随机森林分析,默认返回Gini指数重要性结果##
+            ##getImpLegacyRfZ()使用randomForest进行随机森林分析,默认返回均一化的分类准确性重要性结果##
+            ##getImpLegacyRfRaw()使用randomForest进行随机森林分析,默认返回原始置换重要性结果##
+            ##getImpLegacyRfGini()使用randomForest进行随机森林分析,默认返回Gini指数重要性结果##
+            ##getImpFerns()使用rFerns包进行Random Ferns importance计算特征的重要性。它的运行速度比随机森林更快，必须优化depth参数，且可能需要的迭代次数更多##
+            ##另外还有getImpXgboost,getImpExtraGini,getImpExtraZ,getImpExtraRaw等设置选项##
+            ##参数设置为之前随机森林的调参结果,参数会传递给RandomForest函数##
+            #importance = TRUE,
+            #ntree=500,maxnodes=7, # 注释掉此句，使用默认参数进行变量筛选
+            #mtry = 36 
+            ##随着迭代的进行，剩余特征变量数<80后，函数会报警告信息，后续的迭代mtry将恢复默认值##
+            ##介意warning信息，可以不用设置mtry##
+)
+
+table(fs$finalDecision) 
+
+#绘制鉴定出的变量的重要性
+p1a <- plot(fs, las = 2)
+#绘制Boruta算法运行过程中各个变量的重要性得分的变化 
+#（绿色是重要的变量，红色是不重要的变量，蓝色是影子变量，黄色是Tentative变量）。
+Boruta::plotImpHistory(fs)
+#定义一个函数提取每个变量对应的重要性值。
+library(dplyr)
+boruta.imp <- function(x){
+  imp <- reshape2::melt(x$ImpHistory, na.rm=T)[,-1]
+  colnames(imp) <- c("Variable","Importance")
+  imp <- imp[is.finite(imp$Importance),]
+  variableGrp <- data.frame(Variable=names(x$finalDecision), 
+                            finalDecision=x$finalDecision)
+  showGrp <- data.frame(Variable=c("shadowMax", "shadowMean", "shadowMin"),
+                        finalDecision=c("shadowMax", "shadowMean", "shadowMin"))
+  variableGrp <- rbind(variableGrp, showGrp)
+  boruta.variable.imp <- merge(imp, variableGrp, all.x=T)
+  sortedVariable <- boruta.variable.imp %>% group_by(Variable) %>% 
+    summarise(median=median(Importance)) %>% arrange(median)
+  sortedVariable <- as.vector(sortedVariable$Variable)
+  boruta.variable.imp$Variable <- factor(boruta.variable.imp$Variable, levels=sortedVariable)
+  invisible(boruta.variable.imp)
+}
+
+#boruta重要性
+boruta.variable.imp <- boruta.imp(fs)
+#导出
+write.table(boruta.variable.imp,'boruta.importance.txt',quote =F,sep="\t",row.names=T)
+#只绘制Confirmed变量
+#提取出Confirmed变量的数据集
+plotdata <- boruta.variable.imp %>% filter(finalDecision=="Confirmed")
+library(RColorBrewer)
+library(ggplot2)
+#mycolor<- colorRampPalette(brewer.pal(12,"Paired"))(12)#根据筛选出的特征数修改
+
+mycolor <- c("#0072B599","#E1872799","#20854E99","#925E9F99",
+             "#7876B199","#6F99AD99","#FFDC9199",
+             "#0099B499","#EE4C9799","#FDAF9199","#74767899",
+             "#ED000099")
+names(plotdata)
+p1 <- ggplot(plotdata, aes(x =Importance, y = Variable,fill = Variable)) + 
+  geom_boxplot(outlier.colour = "grey90")+#颜色填充
+  theme_bw()+  #去掉背景色
+  theme(legend.position="none")+   #去掉legend
+  scale_fill_manual(values = mycolor)+ # 设置自定义填充色
+  theme(panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        axis.text.x = element_text(size = 6,color="black"),
+        axis.text.y = element_text(size = 8,color="black"))            #移除网格线 (但不移除背景颜色和边界线)
+p1
+#保存
+ggsave("./Boruta重要特征.pdf",p1,width = 6,height = 10)
+
+
+#提取重要的变量
+#boruta.finalVars <- data.frame(Item=getSelectedAttributes(fs, withTentative = F), Type="Boruta")
+##holdHistory = TRUE,则可使用attStats()获取特征的重要性统计信息。
+attStats(fs)
+select.name = getSelectedAttributes(fs) # 获取标记为Confirmed的特征名。
+select.name # 随机森林参数设置不同，结果有明显区别。选择分类正确率高的参数。
+
+boruta.name <- select.name
+#提取筛选出的变量
+newdd <- merge(data_train[1],data_train[select.name],by = "row.names",all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+#导出
+write.table(newdd,file="Boruta_variablelist.txt",sep="\t",quote=F,col.names=T)
+
+newddtest <- merge(data_test[1],data_test[select.name],by = "row.names",all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest,file="Boruta_variablelist_test.txt",sep="\t",quote=F,col.names=T)
+#save.image('boruta结果.RData')
+####2.lasso#####
+data_train$diagnosis <- as.numeric(as.character(data_train$diagnosis))
+#构建模型(第二列开始是自变量)
+x=as.matrix(data_train[,c(2:ncol(data_train))])
+x <- apply(x, 2, as.numeric)
+# 第一列是分组
+y=data_train[,1]
+y <- apply(y, 2, as.numeric)
+#读入包
+library(glmnet)
+library(pROC)
+#构建模型, alpha=1：进行LASSO回归；alpha=0，进行岭回归
+fit=glmnet(x, y, family = "binomial", alpha=1)
+plot(fit, xvar="lambda", label=T)
+#10折交叉验证
+set.seed(1234)
+cvfit=cv.glmnet(x, y, family="binomial", alpha=1,nfolds = 10)
+pdf(file="cvfit.pdf",width=6,height=5.5)
+plot(cvfit)
+dev.off()
+plot(cvfit)
+
+#提取两个λ值：
+lambda.min <- cvfit$lambda.min
+lambda.1se <- cvfit$lambda.1se
+lambda.min
+lambda.1se
+#指定λ值重新构建模型(通过λ值筛选基因)：
+model_lasso_min <- glmnet(x, y, alpha = 1, lambda = lambda.min,family = "binomial")
+model_lasso_1se <- glmnet(x, y, alpha = 1, lambda = lambda.1se,family = "binomial")
+#拎出模型使用的变量(存放在beta中)：
+head(model_lasso_min$beta)#"."表示这个变量没有被使用
+#使用as.numeric把.转化为0，然后通过筛选非0的方式将构建模型所使用的变量提取出来。
+ID_min <- rownames(model_lasso_min$beta)[as.numeric(model_lasso_min$beta)!=0]#as.numeric后"."会转化为0
+length(ID_min)
+ID_1se <- rownames(model_lasso_1se$beta)[as.numeric(model_lasso_1se$beta)!=0]
+length(ID_1se)
+#提取基于最小拉姆达值所筛选的变量
+newdd <- data_train[ID_1se]
+#添加分组
+#根据ID,合并
+newdd = merge(data_train$diagnosis,newdd,by = "row.names",all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+library(dplyr)
+newdd <- newdd %>% rename(diagnosis = x)
+
+#导出
+out=rbind(ID=colnames(newdd),newdd)
+write.table(out,file="Lasso_variablelist_min.txt",sep="\t",quote=F,col.names=F)
+
+
+newddtest <- merge(data_test[1],data_test[ID_min],by = "row.names",all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest,file="Lasso_variablelist_test.txt",sep="\t",quote=F,col.names=T)
+save.image('LASSO结果.RData')
+### 取boruta跟LASSO的交集
+interesect.name <- intersect(boruta.name,ID_1se)
+newdd <- data_train[interesect.name]
+
+#添加分组
+#根据ID,合并
+newdd = merge(data_train$diagnosis,newdd,by = "row.names",all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+library(dplyr)
+newdd <- newdd %>% rename(diagnosis = x)
+out=rbind(ID=colnames(newdd),newdd)
+#导出
+write.table(out,file="boruta跟LASSO的交集_训练集.txt",sep="\t",quote=F,col.names=F)
+interesect.name <- c("age" ,"platelets_max","albumin_min","bun_min",
+       "calcium_min","potassium_min","abs_monocytes_max","abs_neutrophils_min",
+       "pt_max","ptt_max","ld_ldh_min")
+newddtest <- merge(data_test[1],data_test[interesect.name],by = "row.names",all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest,file="boruta跟LASSO的交集_测试集.txt",sep="\t",quote=F,col.names=T)
+#save.image('boruta跟LASSO的交集.RData')
+
+
+######二、模型构建######
+#以boruta筛选出的变量列表为例进行二分类模型的构建
+#####1.传统Logistic模型####
+rm(list=ls())
+library(here)
+#读取boruta跟LASSO的交集
+data <- read.delim("boruta跟LASSO的交集_训练集.txt",
+                   sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+
+data_pred <- read.delim("boruta跟LASSO的交集_测试集.txt",
+                        sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+
+#分组变量转为因子
+data$diagnosis <- as.factor(data$diagnosis)
+data_pred$diagnosis <- as.factor(data_pred$diagnosis)
+#加载R包
+library(MASS)
+###（1） 建立完全模型 ####
+full.model <- glm(diagnosis~., data = data,family =  binomial(link = "logit"))
+summary(full.model)
+logisticModel <- glm(diagnosis~., data = data,family =  binomial(link = "logit"))
+saveRDS(logisticModel, file = "lg_model.rds")
+
+#对拟合模型的残差来源进行分析
+anova(full.model,test = "Chisq")
+### （2）变量重要性####
+library(vip) 
+library(RColorBrewer)
+library(ggplot2)
+#重要得分
+vi_scores <- vip::vi(full.model, method = "firm",train = data,target = diagnosis)
+#排序#排序vip::
+vi_scores <- vi_scores[order(vi_scores$Importance, decreasing = T),]
+#导出重要性结果
+write.table(vi_scores,'important.score.logistic.txt',quote =F,sep="\t",row.names=T)
+
+p <- ggplot(data = vi_scores, mapping = aes(x=reorder(Variable,Importance),
+                                            fill=Variable,
+                                            y=Importance  #reorder让X根据Y排序
+                                            )) + geom_bar(stat="identity")+coord_flip()
+
+p1 <- p+labs(x = " ")+ #移去y轴的标签 (因为刚好相反)
+  scale_y_continuous(expand = c(0,0.05))+  #调整柱形图起点和y轴的距离 修改（）第二个参数
+  theme_bw()+  #去掉背景色
+  theme(legend.position="none")+   #去掉legend
+  theme(panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        axis.text.x = element_text(size = 6,color="black"),
+        axis.text.y = element_text(size = 8,color="black"))            #移除网格线 (但不移除背景颜色和边界线)
+
+p1
+p2 <- p1+scale_fill_nejm()
+p2
+#保存图片
+ggsave("./重要性排序图_逻辑回归.pdf",p2 ,width = 6,height = 10)
+### （3）作出预测####
+## 预测测试集
+glm.pred <- predict(full.model,data_pred,type='response') 
+library(pROC)
+library(PRROC)
+glmROC=roc(data_pred$diagnosis,as.numeric(glm.pred))
+auc=glmROC$auc
+pr_lr <- pr.curve(as.numeric(glm.pred),data_pred$diagnosis)
+#基础ROC
+plot(glmROC,print.auc=T)
+#查看单个模型
+auc
+
+library(caret) 
+#设置判断阈值为0.5
+pre_matrix = data.frame(prob=glm.pred,obs=data_pred$diagnosis)
+levels(data_pred$diagnosis)
+pre_matrix$predict<-ifelse(pre_matrix$prob>0.5,"1", "0" )
+b=table(pre_matrix$predict,data_pred$diagnosis,dnn=c("预测值","真实值"))
+caret::confusionMatrix(b)
+
+### (4）进行500次的bootstrap验证#####
+#建立循环
+set.seed(1234)
+auc_boot=c()
+for (i in 1:500) {
+  incides= sample(1:333,replace = T) # 有放回！bootstrap样本，改成样本数
+  fit.glm <- glm(diagnosis ~ ., family = binomial(link="logit"), data=data_pred[incides,])  # bootstrap模型
+  glm.pred <- predict(fit.glm,data_pred,type='response')  # 在原数据集上验证！！
+  glmROC=roc(data_pred[,1],as.numeric(glm.pred))
+  auc=glmROC$auc
+  auc_boot=c(auc_boot,auc)
+}
+## 标准差
+sd(auc_boot)
+## 均值，0.96
+mean(auc_boot)
+#hist(auc_boot)
+quantile(auc_boot,probs=.05)
+quantile(auc_boot,probs=.95)
+### （5）重复100次的五折交叉验证####
+#设置随机种子，使数据分割可重复
+library(caret)
+set.seed(1234)
+#多次K折交叉验证
+#5折10次交叉验证
+#folds <-createMultiFolds(y=data_pred$diagnosis,k=5,times=100)
+#folds会产生5*100=500个数据组合
+#取fold 1数据为训练集，
+#train <- data_pred[folds[[1]],]
+#其余为验证集
+#test <- data_pred[-folds[[1]],]
+#构建模型
+model_test<-glm(diagnosis ~ ., family = binomial(link="logit"), data=data,weights = train_weight)
+
+#验证队列做预测
+model_pre<-predict(model_test,
+                   type='response',
+                   newdata=data_pred)
+#查看AUC值、敏感性、特异性
+library(pROC)
+roc1<-roc((data_pred$diagnosis),as.numeric(model_pre))
+round(auc(roc1),3)
+roc1$sensitivities
+round(roc1$specificities,3)
+#批量计算AUC值
+#建一个放auc值的空向量
+set.seed(1234)
+auc_value<-as.numeric()
+#上述步骤K*n次
+for(i in 1:500){
+  train<-data_pred[ folds[[i]],] #folds[[i]]作为测试集
+  test <- data_pred[-folds[[i]],] #剩下的数据作为训练集
+  model<-glm(diagnosis ~ ., family = binomial(link="logit"), data=train)  
+  model_pre<-predict(model,type='response', newdata=test)
+  auc_value<- append(auc_value,as.numeric(auc(as.numeric(test[,1]),as.numeric(model_pre))))
+}
+#查看auc值分及平均auc
+summary(auc_value)
+mean(auc_value) 
+sd(auc_value)
+#95%置信区间
+quantile(auc_value,probs=.05)
+quantile(auc_value,probs=.95)
+
+save.image('LR模型.RData')
+#####2.随机森林模型####
+#分组变量转为因子
+data$diagnosis <- as.factor(data$diagnosis)
+data_pred$diagnosis <- as.factor(data_pred$diagnosis)
+
+
+library(randomForest)
+###（1） 建立完全模型 ####
+#进行随机森林分析并查看结果。
+#一般先运行一下，看一下系统自动给出的mtry，后续再进行调参
+#设置随机种子数，确保以后再执行代码时可以得到一样的结果
+set.seed(2025666)
+forest <- randomForest(x=data[-c(1)],#去掉第一列，即分组列
+                       y = as.factor(data$diagnosis),#分组变量,需要进行因子化
+                       importance = TRUE, #计算每个特征的重要性
+                       ntree = 500, #决策树棵数（默认500）
+                       #mtry = 10, # 设置每颗决策树中的自变量数量。判别默认自变量数量的平方根。回归默认自变量数量的1/3.
+                       proximity = TRUE ) #是否计算样本间的近邻测度；
+print(forest) #模型概要
+#判断树的数量，树的数量大于200的时候就基本稳定了.此时为肉眼判断
+plot(forest)
+#系统给出的是mtry为5,
+# 默认参数计算出的OOB error rate为15.62%。
+forest$type #分析类型：分类
+forest$confusion # 混淆矩阵（confusion matrix），比较了预测分类与真实分类的情况,显示判别分析的误差率。行名表示实际的类别，行数值之和是该类别包含样本数，列名表示随机森林判定的类别，class.error代表了错误分类的样本比例。
+mean(forest$confusion[,3])#整体class error
+#ntree(构建决策树数量)，mtry(用于构建决策树的变量数)和maxnodes(最大终端节点数)是随机森林分析中影响分析结果的重要参数。这些参数的值都不是越大越好，都需要找到一个合适的值，调参的最终目的就是要降低分类或回归错误率。
+### （2）检测最佳mtry#####用caret包中的train函数检测最佳mtry
+### ?trainControl,查看各参数意义
+library(caret)
+cntrl = trainControl(
+  method = "repeatedcv", # 可改用OOB error rate方法
+  number = 10, # 设置k-folds，此值对最后的结果影响很大。样本量较少时。此值可设置小一些。
+  repeats =10, # 设置检测重复次数
+  #p = 2/3, # the training percentage
+  search = "random", # 可选"grid"
+  verboseIter = FALSE,
+  returnData =  FALSE,
+  returnResamp = "final"
+) # 设置方法
+#set.seed(1234)
+model <- caret::train(x=data[-c(1)],#去掉第一列，即分组列
+               y = as.factor(data$diagnosis),
+               method = "rf",
+               trControl = cntrl
+)
+## 查看最佳mtry
+model$bestTune # 最佳mtry=5
+#此时两钟方法筛选出的参数相同无需比较，若不同则分别构建两种方法筛选出来的mtry值
+#模型一
+#set.seed(1234)
+RF1 <- randomForest(x=data[-c(1)],#去掉第一列，即分组列
+                    y = as.factor(data$diagnosis),#分组变量
+                    importance = TRUE, #计算每个特征的重要性
+                    ntree = 500, #决策树棵数（默认500）
+                    mtry = 1, # 设置每颗决策树中的自变量数量。判别默认自变量数量的平方根。回归默认自变量数量的1/3.
+                    proximity = TRUE ) #是否计算样本间的近邻测度；
+
+RF1
+RF_Model <- RF1
+saveRDS(RF_Model, file = "RF_Model.rds")
+
+
+#选用模型一
+RF.best =RF1
+library(rfPermute) #可用于补齐缺失值，计算混淆矩阵及置信区间
+RF.best
+rfPermute::confusionMatrix(RF.best) 
+### （3）变量重要性####
+##RF.best$importance #包含分类数+2列数据，每个自变量对每个分类的平均正确性降低值(mean descrease in accuracy),后两列分别为变量对所有分类的MeanDecreaseAccuracy和MeanDecreaseGini(节点不纯度减少值)。两个值越大，变量的重要性越大。
+##提取每个变量对样本分类的重要性
+RF.best$importanceSD # 变量重要值的置换检验的标准误，最后一列为MeanDecreaseAccuracy置换检验的p值。
+impor = data.frame(importance(RF.best),MDA.p = RF.best$importanceSD[4])
+#localim = data.frame(RF.best$localImportance) # 变量对某个样本分类正确性的影响。
+## 将变量按重要性降序排列
+#impor = impor[with(impor,order(MeanDecreaseGini,MeanDecreaseAccuracy,decreasing =TRUE)),]
+library(tidyverse)
+impor = arrange(impor,desc(MeanDecreaseGini),desc(MeanDecreaseAccuracy)) # 优先考虑哪个指数，就把该指数放在前面。
+#保存
+write.table(impor,file = "RF_importance_feature.txt",quote = F,sep = '\t', row.names = T, col.names = T)  #输出重要性
+#绘图
+library(RColorBrewer)
+library(ggplot2)
+
+#绘图
+#绘制物种类型种重要性柱状图
+p <- ggplot(data = impor, mapping = aes(x=reorder(rownames(impor),MeanDecreaseGini),
+                                        y=MeanDecreaseGini,   #reorder让X根据Y排序
+                                        fill=rownames(impor))) + geom_bar(stat="identity")+coord_flip()
+
+p1 <- p+labs(x = " ")+ #移去y轴的标签 (因为刚好相反)
+  scale_y_continuous(expand = c(0,0.05))+  #调整柱形图起点和y轴的距离 修改（）第二个参数
+  theme_bw()+  #去掉背景色
+  theme(legend.position="none")+   #去掉legend
+  theme(panel.grid.major=element_blank(),
+        panel.grid.minor=element_blank(),
+        axis.text.x = element_text(size = 6,color="black"),
+        axis.text.y = element_text(size = 8,color="black"))            #移除网格线 (但不移除背景颜色和边界线)
+
+p1
+p2 <- p1+scale_fill_nejm()
+p2
+#保存
+ggsave("./随机森林重要特征.pdf",p2,width = 6,height = 10)
+### (4）进行500次的bootstrap验证#####
+#开始预测(模型原数据)
+#建立循环
+#先将分组变量转为因子变量！
+data$diagnosis <- as.factor(data$diagnosis )
+library(pROC)
+#set.seed(1234)
+auc_boot=c()
+for (i in 1:500) {
+  incides= sample(1:333,replace = T) # 有放回！bootstrap样本
+  Final_model <-randomForest(
+    diagnosis~.,
+    ntree = 500,
+    mtry=1,
+    importance=TRUE,# 评估预测变量的重要性
+    localImp = TRUE,	# 计算自变量对样本的重要性。
+    proximity = TRUE,# 计算行之间的接近度
+    oob.prox = TRUE,#只根据袋外数据来计算接近度
+    norm.votes = TRUE, # 默认以比例显示投票结果，FALSE以计数形式展示。
+    data=data[incides,]) # bootstrap模型
+  pred <- predict(Final_model,data_pred,type='response')  # 在原数据集上验证！！
+  glmROC=roc(data[,1],as.numeric(pred))
+  auc=glmROC$auc
+  auc_boot=c(auc_boot,auc)
+}
+
+## 标准差
+sd(auc_boot)
+## 均值，0.96
+mean(auc_boot)
+#hist(auc_boot)
+quantile(auc_boot,probs=.05)
+quantile(auc_boot,probs=.95)
+
+### （5）重复100次的五折交叉验证####
+#####重复100次的5折交叉验证
+#设置随机种子，使数据分割可重复
+library(caret)
+#set.seed(1234)
+#多次K折交叉验证
+#5折10次交叉验证
+folds <-createMultiFolds(y=data$diagnosis,k=5,times=100)
+#folds会产生5*100=500个数据组合
+#取fold 1数据为训练集，
+train <- data[folds[[1]],]
+train <- data
+#其余为验证集
+test <- data[-folds[[1]],]
+test <- data_pred
+#构建模型
+model_test<-randomForest(
+  x = train[-c(1)],y = factor(train$diagnosis),
+  ntree = 500,
+  mtry=1,
+  importance=TRUE,# 评估预测变量的重要性
+  localImp = TRUE,	# 计算自变量对样本的重要性。
+  proximity = TRUE,# 计算行之间的接近度
+  oob.prox = TRUE,#只根据袋外数据来计算接近度
+  norm.votes = TRUE, # 默认以比例显示投票结果，FALSE以计数形式展示。
+)
+#验证队列做预测
+model_pre<-predict(model_test,
+                   type='response',
+                   newdata=test)
+
+#查看AUC值、敏感性、特异性
+library(pROC)
+roc1<-roc((test$diagnosis),as.numeric(model_pre))
+round(auc(roc1),3)
+roc1$sensitivities
+round(roc1$specificities,3)
+#批量计算AUC值
+#建一个放auc值的空向量
+set.seed(2025666)
+auc_value<-as.numeric()
+#上述步骤K*n次
+for(i in 1:500){
+  train<- data #data作为测试集
+  test <- data_pred #剩下的数据作为训练集
+  model <- randomForest(
+    x = train[-c(1)],y = factor(train$diagnosis),
+    ntree = 500,
+    mtry=2,
+    importance=TRUE,# 评估预测变量的重要性
+    localImp = TRUE,	# 计算自变量对样本的重要性。
+    proximity = TRUE,# 计算行之间的接近度
+    oob.prox = TRUE,#只根据袋外数据来计算接近度
+    norm.votes = TRUE, # 默认以比例显示投票结果，FALSE以计数形式展示。
+  )
+  model_pre<-predict(model,type='response', newdata=test)
+  auc_value<- append(auc_value,as.numeric(auc(as.numeric(test[,1]),as.numeric(model_pre))))
+}
+#查看auc值分及平均auc
+summary(auc_value)
+mean(auc_value) # 0.8242308
+sd(auc_value)
+auc_value_order=auc_value[order(auc_value)]
+#95%置信区间
+quantile(auc_value_order,probs=.05)
+quantile(auc_value_order,probs=.95)
+save.image('RF_模型验证.RData')
+#####3.支持向量机模型####
+rm(list=ls())
+#setwd("D:\\Desktop\\特征选择+机器学习")
+#读取筛选出的特征表
+data <- read.delim("Boruta_variablelist.txt",
+                   sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+data_pred <- read.delim("Boruta_variablelist_test.txt",
+                        sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+
+#读取LASSO筛选出的特征表
+data <- read.delim("Lasso_variablelist_min.txt",
+                   sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+
+data_pred <- read.delim("Lasso_variablelist_test.txt",
+                        sep = '\t', row.names=1,header = TRUE, check.names = FALSE)
+
+###（1） 建立完全模型 ####
+library(e1071)
+#寻找最佳参数
+set.seed(2025666)
+#分组变量转为0，1变量
+#data$diagnosis <- ifelse(data$diagnosis == "Impaired", 1, 0)
+###（2）寻找最佳参数#####
+tuned <- tune.svm(diagnosis~., data=data,
+                  gamma=10^(-6:1),
+                  cost=10^(-10:10))
+
+tuned
+###根据结果重新构建svm模型
+Final_moderl<- svm(diagnosis~., data=data,gamma=1,cost=1)
+#自己先预测自己
+svm.pred <- predict(Final_moderl,data_pred) 
+library(pROC)
+svmROC=roc(data_pred$diagnosis,as.numeric(svm.pred))
+auc=svmROC$auc
+auc
+
+
+### (3）进行500次的bootstrap验证#####
+library(caret)
+#构建函数
+rsq <- function(formula, data,data_pred, indices) { 
+  # 通过data得到重抽样样本
+  d <- data 
+  # 通过formula得到模型
+  fit.svm <- svm(formula,data=d,gamma=1,cost=1)
+  # 用boot的模型在原数据集上预测
+  svm.pred <- predict(fit.svm,data_pred) 
+  # 得到预测的ROC
+  svmROC=roc(data_pred$diagnosis,as.numeric(svm.pred))
+  # 返回ROC的AUC
+  return(svmROC$auc)
+} 
+#构建模型
+library(boot) 
+set.seed(1234) 
+results <- boot(data=data, 
+                data_pred=data_pred,
+                statistic=rsq, 
+                R=500, formula=diagnosis~.)
+print(results)
+mean(results$t)
+boot.ci(results, type=c("perc", "bca"))
+quantile(results$t,probs=.05)
+quantile(results$t,probs=.95)
+
+### （4）重复100次的五折交叉验证####
+#设置随机种子，使数据分割可重复
+library(caret)
+set.seed(1234)
+#多次K折交叉验证
+#5折10次交叉验证
+folds <-createMultiFolds(y=data$diagnosis,k=5,times=100)
+#folds会产生5*100=500个数据组合
+#取fold 1数据为训练集，
+train <- data[folds[[1]],]
+#其余为验证集
+test <- data[-folds[[1]],]
+#构建模型
+model_test<- svm(diagnosis~., data=data,gamma=0.0001,cost=10000)
+#验证队列做预测
+model_pre<-predict(model_test,
+                   newdata=test)
+#查看AUC值、敏感性、特异性
+library(pROC)
+roc1<-roc((test$diagnosis),as.numeric(model_pre))
+round(auc(roc1),3)
+roc1$sensitivities
+round(roc1$specificities,3)
+#批量计算AUC值
+#建一个放auc值的空向量
+set.seed(1234)
+auc_value<-as.numeric()
+#上述步骤K*n次
+for(i in 1:500){
+  train<- data[ folds[[i]],] #folds[[i]]作为测试集
+  test <- data[-folds[[i]],] #剩下的数据作为训练集
+  model<- svm(diagnosis~.,data=train,gamma=0.0001,cost=10000)
+  model_pre<-predict(model,newdata=test)
+  auc_value<- append(auc_value,as.numeric(auc(as.numeric(test[,1]),as.numeric(model_pre))))
+}
+#查看auc值分及平均auc
+summary(auc_value)
+mean(auc_value)
+auc_value_order=auc_value[order(auc_value)]
+#95%置信区间
+quantile(auc_value_order,probs=.05)
+quantile(auc_value_order,probs=.95)
+save.image('SVM_模型.RData')
+#####4.XGboost####
+###（1） 建立模型 ####
+#rm(list=ls())
+#setwd("D:\\Desktop\\特征选择+机器学习")
+library(xgboost)
+library(caret)
+library(funModeling) ##这个包是这位大佬开发的一个包，用于数据分析、数据准备和模型表现评价
+library(tidyverse)
+source("shap.R") # pablo14在github上写的函数用于计算xgboost模型d的SHAP值
+#下载地址https://github.com/pablo14/shap-values
+#查看数据结构
+str(data$diagnosis)
+#xgboost需要转化成xgboost特有格式
+X_train <-data %>%
+  dplyr::select(-c(diagnosis)) %>%
+  as.matrix()
+Y_train <-ifelse(data$diagnosis == "1", 1, 0) #转为数值型向量
+X_test <-data_pred %>%
+  dplyr::select(-c(diagnosis)) %>%
+  as.matrix()
+Y_test <-ifelse(data_pred$diagnosis == "1", 1, 0) #转为数值型向量
+
+# 构造模型需要的xgb.DMatrix对象，处理对象为稀疏矩阵
+dtrain <-xgb.DMatrix(data = X_train,label = Y_train)
+dtest <-xgb.DMatrix(data = X_test,label = Y_test)
+
+library(rBayesianOptimization)
+cv_folds <- KFold(Y_train, nfolds = 10, stratified = TRUE, seed = 0)
+### （2）交叉验证，贝叶斯优化。#####
+#以下基本不需修改，nround = 10可修改
+xgb_cv_bayes <- function(eta, max.depth, min_child_weight, subsample) { 
+  cv <- xgb.cv( 
+    params = list( booster = "gbtree", 
+                   eta = eta, 
+                   max_depth = max.depth, 
+                   min_child_weight = min_child_weight, 
+                   subsample = subsample, 
+                   colsample_bytree = 0.6, 
+                   lambda = 1, 
+                   alpha = 0, 
+                   objective = "binary:logistic", 
+                   eval_metric = "auc" 
+    ), 
+    data = dtrain, 
+    #减少循环次数以作示例，实际可增大（到100） 
+    nround = 10, 
+    folds = cv_folds, 
+    prediction = TRUE, 
+    showsd = TRUE, 
+    early.stop.round = 5, 
+    maximize = TRUE, 
+    verbose = 0 
+  )
+  list( 
+    Score = cv$evaluation_log[, max(test_auc_mean)], Pred = cv$pred 
+  ) 
+}
+
+## 参数调优 
+## 生成梯度的参数，基本不需修改
+OPT_Res <- BayesianOptimization( 
+  xgb_cv_bayes, 
+  bounds = list( 
+    eta = c(0.01L, 0.05L, 0.1L, 0.3L), 
+    max.depth = c(6L, 8L, 12L),
+    min_child_weight = c(1L, 10L), 
+    subsample = c(0.5, 0.8, 1) 
+  ), 
+  init_grid_dt = NULL, 
+  init_points = 10, 
+  # 减少迭代次数以作示例，实际可增大（到50） 
+  n_iter = 10, 
+  acq = "ucb", 
+  kappa = 2.576, 
+  eps = 0.0, 
+  verbose = TRUE 
+)
+
+## 应用参数 
+params <- list( "eta" = unname(OPT_Res$Best_Par["eta"]), 
+                "max_depth" = unname(OPT_Res$Best_Par["max.depth"]), 
+                "colsample_bytree" = 1, 
+                "min_child_weight" = unname(OPT_Res$Best_Par["min_child_weight"]), 
+                "subsample"= unname(OPT_Res$Best_Par["subsample"]), 
+                "objective"="binary:logistic", 
+                "gamma" = 1, 
+                "lambda" = 1, 
+                "alpha" = 0, 
+                "max_delta_step" = 0, 
+                "colsample_bylevel" = 1, 
+                "eval_metric"= "auc", 
+                "set.seed" = 202566 
+)
+
+# 如果不想忍受上面多循环下的慢速，也可以用一些调好的参数 # 当然如果调出来了则不需要再手动赋值 params <- list( "eta" = 0.05, "max_depth" = 6, "colsample_bytree" = 1, "min_child_weight" = 1, "subsample"= 0.73, "objective"="binary:logistic", "gamma" = 1, "lambda" = 1, "alpha" = 0, "max_delta_step" = 0, "colsample_bylevel" = 1, "eval_metric"= "auc", "set.seed" = 176 )
+#在该模型中nrounds是迭代次数，数值越大运行时间越长。最大50
+#objective是模型类型，我们常用的一般是二分类logistics回归和Cox回归，这里选择前者。
+#每行的train-logloss:代表模型效果，一般越小越好。
+#指定用于更新步长收缩来防止过度拟合，默认0.3
+#树最大深度
+watchlist <- list("train" = dtrain)
+nround = 1000
+#构建模型
+set.seed(202566)
+xgb.model <- xgb.train(params, dtrain, nround, watchlist)
+xgb_model <- xgb.model
+saveRDS(xgb_model, file = "xgb_model.rds")
+#方法一
+#计算SHAP值，每个特征的SHAP值的绝对值的平均值作为该特征的重要性
+shap_result = shap.score.rank(xgb_model = xgb.model, 
+                              X_train = X_train,
+                              shap_approx = F)
+#分值矩阵
+score<- shap_result$shap_score
+mean_score <- shap_result$mean_shap_score
+#保存
+write.table(score,file="XGboost_score.txt",sep="\t",quote=F,col.names=T)
+#计算SHAP值，每个特征的SHAP值的绝对值的平均值作为该特征的重要性
+library(shapviz)
+shap_result2<- shapviz(object=xgb.model,
+                       X=data[,-1],
+                       X_pred=X_train)#矩阵格式
+#分值矩阵
+score2<-shap_result2$S
+score2 <- as.data.frame(score2)
+identical(score$Haemophilus_haemolyticus,score2$Haemophilus_haemolyticus)
+#重要性排序图
+p1 <- sv_importance(shap_result2, kind = "beeswarm", 
+                    show_numbers = T,
+                    max_display = 43L)+
+  theme_bw()
+p1
+ggsave("./SHAP概要图_xgboost_shapviz版本.pdf",p1,width = 10,height = 10)
+#开始预测
+library(pROC)
+#全数据
+pred <- predict(object = xgb.model, newdata =dtest, type = 'prob')  # 在原数据集上验证！！
+data_pred$diagnosis <- ifelse(data_pred$diagnosis == "1", 1, 0)
+ROC=roc(as.numeric(data_pred[,1]),as.numeric(pred))
+ROC
+
+save.image('XGboost.RData')
+### (3）进行500次的bootstrap验证#####
+#开始预测(模型原数据)
+#建立循环
+set.seed(1234)
+auc_boot=c()
+for (i in 1:500) {
+  incides= sample(1:333,replace = T) # 有放回！bootstrap样本
+  xgb.model <- xgboost(data=data.matrix(data[incides,-1]), #没有因子变量，可以使用
+                       label = ifelse(as.character(data[incides,1])=="1", 1,0),
+                       nround=1000,
+                       params,
+  )
+  pred <- predict(object = xgb.model, newdata =xgb.DMatrix(data=data.matrix(data[,-1]),# 在原数据集上验证！！无需修改
+                                                           label = ifelse(as.character(data[,1])=="1", 1,0)), type = 'prob')  
+  glmROC=roc(as.numeric(data[,1]),as.numeric(pred))
+  auc=glmROC$auc
+  auc_boot=c(auc_boot,auc)
+}
+
+## 标准差
+sd(auc_boot)
+## 均值，0.96
+mean(auc_boot)
+
+#hist(auc_boot)
+quantile(auc_boot,probs=.05)
+quantile(auc_boot,probs=.95)
+
+### （4）重复100次的五折交叉验证####
+library(caret)
+set.seed(1234)
+#多次K折交叉验证
+#5折10次交叉验证
+folds <-createMultiFolds(y=data$diagnosis,k=5,times=100)
+#folds会产生5*100=500个数据组合
+#批量计算AUC值
+#建一个放auc值的空向量
+set.seed(1234)
+auc_value<-as.numeric()
+#上述步骤K*n次
+for(i in 1:500){
+  train<- data[ folds[[i]],] #folds[[i]]作为测试集
+  test <- data[-folds[[i]],] #剩下的数据作为训练集
+  model_test <- xgboost(data=data.matrix(train[,-1]), #没有因子变量，可以使用
+                        label = ifelse(as.character(train$diagnosis)=="1", 1,0),
+                        nround=1000,
+                        params,
+  )
+  model_pre<-predict(object =model_test, newdata =xgb.DMatrix(data=data.matrix(test[,-1]),
+                                                              label = ifelse(as.character(test$diagnosis)=="1", 1,0)), type = 'prob')  
+  auc_value<- append(auc_value,as.numeric(auc(test$diagnosis,as.numeric(model_pre))))
+}
+#查看auc值分及平均auc
+summary(auc_value)
+mean(auc_value)
+sd(auc_value)
+#95%置信区间
+quantile(auc_value,probs=.05)
+quantile(auc_value,probs=.95)
+
+
+#####5.LightGBM####
+###（1） 建立模型前准备 ####
+#rm(list=ls())
+library(lightgbm)
+library(tidyverse)
+#查看数据结构
+str(data$diagnosis)
+#lightgbm需要转化成lightgbm特有格式
+X_train <-data %>%
+  dplyr::select(-c(diagnosis)) %>%
+  as.matrix()
+Y_train <-ifelse(data$diagnosis == "1", 1, 0) #转为数值型向量
+X_test <-data_pred %>%
+  dplyr::select(-c(diagnosis)) %>%
+  as.matrix()
+Y_test <-ifelse(data_pred$diagnosis == "1", 1, 0) #转为数值型向量
+
+
+# 将自变量和因变量拼接为lgb.Dataset
+dtrain <- lgb.Dataset(X_train,
+                      label = Y_train,
+                      weight = weights)
+dtest <- lgb.Dataset(X_test,
+                      label = Y_test)
+######寻找最佳参数
+grid_search <- expand.grid(
+  Depth = 8,
+  L1 = 0:5,
+  L2 = 0:5,
+  MinHessianLeaf = 0:2,
+  featureFraction = c(0.8L, 1L)
+)
+grid_search
+
+
+model <- list()
+perf <- numeric(nrow(grid_search))
+#lightgbm调参依赖验证集
+valids <- list(test = dtrain)
+library(data.table)
+## error错可以不管
+for (i in 1:nrow(grid_search)) {
+  model[[i]] <- lgb.train(
+    list(
+      objective = "binary",
+      metric = "l2",
+      lambda_l1 = grid_search[i, "L1"],
+      lambda_l2 = grid_search[i, "L2"],
+      max_depth = grid_search[i, "Depth"],
+      min_data_in_leaf = grid_search[i, "MinHessianLeaf"],
+      feature_fraction = grid_search[i, "featureFraction"],
+      learning_rate=1,
+      feature_pre_filter = FALSE
+    ),
+    dtrain,
+    nrounds=1000,
+    valids,
+    early_stopping_rounds = 5)
+  perf[i] <- min(rbindlist(model[[i]]$record_evals$test$l2))
+}
+
+cat("Model ", which.min(perf), " is lowest loss: ", min(perf), sep = "")
+print(grid_search[which.min(perf), ])
+
+# 最佳参数建模
+params_lightGBM <- list(
+  objective = "binary",
+  metric = "auc",
+  #默认0.0001
+  min_sum_hessian_in_leaf = 0,
+  feature_fraction = 0.8,
+  #默认0
+  lambda_l1 = 0,
+  #默认0
+  lambda_l2 = 0
+)
+
+#构建模型
+lgb.model <- lgb.train(params=params_lightGBM, 
+                       data = dtrain, #lightGBM特有格式
+                       nround =1000
+)
+lgb_model <- lgb.model
+saveRDS(lgb_model, file = "lgb_model.rds")
+### （2）变量重要性####
+#方法一
+#计算SHAP值，每个特征的SHAP值的绝对值的平均值作为该特征的重要性
+library(shapviz)
+shap_result2<- shapviz(object=lgb.model,
+                       X=data[,-1],
+                       X_pred=X_train)#矩阵格式
+#分值矩阵
+score2<-shap_result2$S
+score2 <- as.data.frame(score2)
+write.table(score2,file="lightGBM_score.txt",sep="\t",quote=F,col.names=T)
+
+#重要性排序图
+p1 <- sv_importance(shap_result2, kind = "beeswarm", 
+                    show_numbers = T,
+                    max_display = 43L)+
+  theme_bw()
+p1
+ggsave("./SHAP概要图_LightGBM_shapviz版本.pdf",p1,width = 10,height = 6)
+lgb.model <- lgb.train(params=params_lightGBM, 
+                       data = dtrain, #lightGBM特有格式
+                       nround =1000
+)
+pred <- predict(object = lgb.model, 
+                newdata=data.matrix(data_pred[,-1]), 
+                type = "response")
+glmROC=roc(as.numeric(data_pred$diagnosis),as.numeric(pred))
+auc=glmROC$auc
+
+
+######三、结果美化######
+rm(list=ls())
+setwd("D:\\Desktop\\特征选择+机器学习")
+#以XGboost模型筛选出的shap值为例
+data<- read.delim("XGboost_score.txt", row.names = 1, sep = '\t')
+### 数据长宽转换
+library(tidyr)
+#查看有多少列
+data_long <- pivot_longer(data, cols = 1:12, names_to ="Features", 
+                            values_to = "SHAP")
+
+#计算标准差
+library(tidyverse)
+data_sd<-apply(data,2,sd)
+data_sd <- as.data.frame(data_sd)
+data_sd$Feature <- row.names(data_sd)
+data_sd <- arrange(data_sd,data_sd)
+#固定顺序
+data_long$Features <- factor(data_long$Features,levels =data_sd$Feature)
+
+
+### 绘制
+#绘图
+### 绘制
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(ggbeeswarm)
+
+
+#绘图
+### 绘制
+library(ggplot2)
+library(RColorBrewer)
+library(scales)
+library(ggbeeswarm)
+
+
+shap_plot <-ggplot(data_long,aes(SHAP,Features,color =stat(x))) + 
+  geom_beeswarm(cex =0.3, priority = "descending") + 
+  scale_color_gradientn(name = "Feature value", colours =brewer_pal(palette = "YlOrRd")(6)) +
+  scale_x_continuous(limits = c(-0.22, 0.22))+
+  geom_vline(aes(xintercept=0.0), colour="grey60", linetype="dashed")+
+  xlab('SHAP Value of Boruta-Catboost model')+
+  theme_bw()+
+  theme(#panel.grid.major=element_blank(),
+        # panel.grid.minor=element_blank(),
+        legend.title=element_blank(),
+        legend.position = 'bottom')
+
+final_shap_plot <-ggplot(data_long,aes(SHAP,Features,color =after_stat(x))) + 
+  geom_beeswarm(cex =0.3, priority = "descending",groupOnX=FALSE) + 
+  scale_color_gradientn(name = "Feature value", colours =brewer_pal(palette = "YlOrRd")(6)) +
+  scale_x_continuous(limits = c(-3.1, 3.1))+
+  geom_vline(aes(xintercept=0.0), colour="grey60", linetype="dashed")+
+  xlab('SHAP Value of Boruta-XGboost model')+
+  theme_bw()+
+  theme(#panel.grid.major=element_blank(),
+    # panel.grid.minor=element_blank(),
+    legend.title=element_blank(),
+    legend.position = 'bottom')
+
+final_shap_plot
+ggsave("./shap.pdf",final_shap_plot,width = 8,height =6)
+
+

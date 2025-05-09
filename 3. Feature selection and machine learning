@@ -52,7 +52,6 @@ filter_variable <- colnames(test_transformed)
 filter_variable <- c("diagnosis", filter_variable[filter_variable != "diagnosis"])
 data_test <- test_transformed[filter_variable]
 
-
 #### Boruta
 #替换为自己的数据读取
 #因子化
@@ -90,30 +89,149 @@ fs = Boruta(data_train[,-1],data_train$diagnosis,
 )
 
 table(fs$finalDecision) 
+boruta_result <- fs
+# 绘制 Boruta 重要性历史图
+Boruta::plotImpHistory(boruta_result)
+# 获取 Boruta 重要性并整理数据
+importance_df <- attStats(boruta_result)
+importance_df$feature <- rownames(importance_df)
+# 过滤出非阴影特征并进行数据转换
+importance_df <- importance_df %>% filter(!grepl("^shadow", feature))
+importance_long <- as.data.frame(boruta_result$ImpHistory) %>%
+  pivot_longer(cols = everything(),
+               names_to ="feature",
+               values_to ="importance") %>%
+  filter(!grepl("^shadow", feature)) %>% # 过滤掉阴影特征
+  mutate(feature = gsub("^X","", feature)) %>% # 清理特征名称
+  left_join(
+    data.frame(
+      feature = names(boruta_result$finalDecision),
+      decision = factor(boruta_result$finalDecision,
+                        levels = c("Confirmed","Tentative","Rejected"))
+    ),
+    by ="feature"
+  )
+# 计算每个特征的中位数重要性用于排序
+feature_medians <- importance_long %>% group_by(feature) %>% summarise(
+  median_imp = median(importance, na.rm = TRUE),
+  decision = first(decision)) %>% arrange(desc(median_imp))
+# 按中位数重要性重新排序特征因子
+importance_long <- importance_long %>% mutate(feature = factor(feature, levels = feature_medians$feature))
+confirmed_color <-"#79C377"# 绿色
+tentative_color <-"#fdae61"# 橙黄色
+rejected_color <-"#d7191c"# 红色
 
-#绘制鉴定出的变量的重要性
-p1a <- plot(fs, las = 2)
-#绘制Boruta算法运行过程中各个变量的重要性得分的变化 
-#（绿色是重要的变量，红色是不重要的变量，蓝色是影子变量，黄色是Tentative变量）。
-Boruta::plotImpHistory(fs)
-#定义一个函数提取每个变量对应的重要性值。
-library(dplyr)
-boruta.imp <- function(x){
-  imp <- reshape2::melt(x$ImpHistory, na.rm=T)[,-1]
-  colnames(imp) <- c("Variable","Importance")
-  imp <- imp[is.finite(imp$Importance),]
-  variableGrp <- data.frame(Variable=names(x$finalDecision), 
-                            finalDecision=x$finalDecision)
-  showGrp <- data.frame(Variable=c("shadowMax", "shadowMean", "shadowMin"),
-                        finalDecision=c("shadowMax", "shadowMean", "shadowMin"))
-  variableGrp <- rbind(variableGrp, showGrp)
-  boruta.variable.imp <- merge(imp, variableGrp, all.x=T)
-  sortedVariable <- boruta.variable.imp %>% group_by(Variable) %>% 
-    summarise(median=median(Importance)) %>% arrange(median)
-  sortedVariable <- as.vector(sortedVariable$Variable)
-  boruta.variable.imp$Variable <- factor(boruta.variable.imp$Variable, levels=sortedVariable)
-  invisible(boruta.variable.imp)
-}
+feature_colors <- data.frame(feature = levels(importance_long$feature),
+                             stringsAsFactors = FALSE) %>%
+  left_join(importance_long %>% select(feature, decision) %>% distinct(), by ="feature") %>%
+  mutate(color_code = case_when(
+    decision =="Confirmed"~ confirmed_color,
+    decision =="Tentative"~ tentative_color,
+    decision =="Rejected"~ rejected_color),
+    colored_label = sprintf("<span style='color:%s; font-weight:bold'>%s</span>", color_code, feature)
+  )
+
+decision_plot <- ggplot(importance_long, aes(x = feature, y = importance, fill = decision)) +
+  geom_boxplot(width = 0.7, alpha = 0.85, outlier.size = 1.5, outlier.color ="#404040",
+               outlier.alpha = 0.6, notch = FALSE) +
+  geom_hline(yintercept = 0, color ="grey50", linetype ="dashed") +
+  scale_fill_manual(values = c("Confirmed"= confirmed_color,"Tentative"= tentative_color,
+                               "Rejected"= rejected_color), name ="Feature Status") +
+  scale_x_discrete(labels = setNames(feature_colors$colored_label, feature_colors$feature)) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.02))) +
+  labs(title ="Boruta Feature Importance Analysis", x ="Variable", y ="Importance") +
+  theme_minimal(base_size = 12) +
+  theme(panel.border = element_rect(color ="black", fill = NA, linewidth = 0.8),
+        axis.text.x = element_markdown(angle = 45, hjust = 1, vjust = 1),
+        axis.title = element_text(face ="bold"),
+        plot.title = element_markdown(size = 16, face ="bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color ="grey30", size = 11),
+        axis.text.y = element_text(color ="black"),
+        axis.title.x = element_text(margin = unit(c(10, 0, 0, 0),"pt"), color ="grey30"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position ="top",
+        legend.title = element_text(face ="bold"),
+        plot.background = element_rect(fill ="white", color = NA),
+        plot.margin = unit(c(15, 20, 25, 15),"pt"),
+        plot.caption = element_text(color ="grey50", size = 8)) 
+# 显示并保存常规重要性结果图
+print(decision_plot)
+#保存
+ggsave("./Boruta重要特征.pdf", decision_plot,width = 10,height = 5)
+
+
+
+
+plotdata <- importance_long %>% filter(decision =="Confirmed")
+# 检查 Confirmed 变量是否存在
+if(nrow(plotdata) == 0) { stop("没有找到 Confirmed 变量，请检查 Boruta 结果。") }
+# 计算每个 Confirmed 特征的中位数重要性等统计指标用于排序
+feature_medians <- plotdata %>% group_by(feature) %>% summarise(
+  median_imp = median(importance, na.rm = TRUE),
+  mean_imp = mean(importance, na.rm = TRUE),
+  min_imp = min(importance),
+  max_imp = max(importance)) %>% arrange(desc(median_imp))
+# 再次确认只保留 Confirmed 变量
+plotdata <- importance_long %>% filter(decision == "Confirmed")
+# 再次检查 Confirmed 变量是否存在
+if(nrow(plotdata) == 0) { stop("没有找到 Confirmed 变量，请检查 Boruta 结果。") }
+# 重新按中位数重要性排序特征因子
+plotdata <- plotdata %>% mutate(feature = factor(feature, levels = feature_medians$feature))
+# 设置增强的配色方案
+confirmed_color <-"#79C377" # 基础绿色
+gradient_colors <- colorRampPalette(c("#BEE3BB","#347A32"))(length(unique(plotdata$feature)))
+darker_green <-"#2A5C2A"# 更深绿色用于线条
+highlight_color <-"#E74C3C"# 突出显示色（红色）用于重要标记
+grid_color <-"#E0E0E0"# 网格线颜色
+# 创建增强版 Confirmed 特征重要性山脊图
+ridge_plot <- ggplot(plotdata, aes(x = importance, y = feature, fill = feature)) +
+  geom_density_ridges(aes(height = after_stat(density)), alpha = 0.85, scale = 1.2,
+                      rel_min_height = 0.01, quantile_lines = TRUE, quantiles = 2,
+                      color = darker_green, bandwidth = 0.8, panel_scaling = FALSE,
+                      jittered_points = TRUE, point_size = 0.4, point_alpha = 0.5,
+                      point_color = darker_green) +
+  geom_hline(yintercept = 1:length(unique(plotdata$feature)), color = grid_color, size = 0.3) +
+  geom_vline(xintercept = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 2),
+             color = grid_color, size = 0.3) +
+  geom_vline(xintercept = 0, color ="grey40", linetype ="dashed", size = 0.6) +
+  geom_text(data = feature_medians, aes(x = max_imp + 0.8, y = feature, label = sprintf("%.2f", median_imp)),
+            hjust = 0, size = 3.5, fontface ="bold", color = darker_green) +
+  geom_point(data = feature_medians, aes(x = median_imp, y = feature), size = 3, color = highlight_color, shape = 18) +
+  geom_point(data = feature_medians, aes(x = median_imp, y = feature), size = 5, color = highlight_color,
+             shape = 1, stroke = 1.2, alpha = 0.7) +
+  scale_fill_manual(values = gradient_colors) +
+  scale_x_continuous(limits = c(min(feature_medians$min_imp) - 1, max(feature_medians$max_imp) + 4),
+                     expand = expansion(mult = c(0.02, 0.05)),
+                     breaks = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 1),
+                     minor_breaks = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 0.5)) +
+  guides(fill ="none") +
+  labs(title ="Ridge Plot of Confirmed Features Importance",
+       subtitle ="Features sorted by median importance with distribution pattern",
+       caption ="Red diamonds show median importance values",
+       x ="Variable Importance", y = NULL) +
+  theme_ridges(font_size = 12, grid = FALSE) +
+  theme(panel.border = element_rect(color ="black", fill = NA, linewidth = 0.8),
+        panel.background = element_rect(fill ="white", color = NA),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        axis.line = element_line(color ="black", size = 0.6),
+        axis.ticks = element_line(color ="black", size = 0.6),
+        axis.text.y = element_text(color = darker_green, face ="bold", size = 10),
+        axis.text.x = element_text(color ="black", size = 9),
+        axis.title.x = element_text(face ="bold", size = 11, margin = margin(t = 10)),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 10)),
+        plot.subtitle = element_text(hjust = 0.5, color = "grey30", size = 11, margin = margin(b = 15)),
+        plot.caption = element_text(hjust = 1, color = "grey40", size = 9, margin = margin(t = 10)),
+        plot.background = element_rect(fill = "#FAFAFA", color = NA),
+        plot.margin = unit(c(15, 20, 15, 15), "pt"))
+# 显示并保存增强版 Confirmed 特征重要性山脊图
+print(ridge_plot)
+ggsave("enhanced_confirmed_features_ridge.pdf", ridge_plot, width = 12, height = 10)
+
+
+
+
+
 
 #boruta重要性
 boruta.variable.imp <- boruta.imp(fs)
@@ -122,27 +240,8 @@ write.table(boruta.variable.imp,'boruta.importance.txt',quote =F,sep="\t",row.na
 #只绘制Confirmed变量
 #提取出Confirmed变量的数据集
 plotdata <- boruta.variable.imp %>% filter(finalDecision=="Confirmed")
-library(RColorBrewer)
-library(ggplot2)
-#mycolor<- colorRampPalette(brewer.pal(12,"Paired"))(12)#根据筛选出的特征数修改
 
-mycolor <- c("#0072B599","#E1872799","#20854E99","#925E9F99",
-             "#7876B199","#6F99AD99","#FFDC9199",
-             "#0099B499","#EE4C9799","#FDAF9199","#74767899",
-             "#ED000099")
-names(plotdata)
-p1 <- ggplot(plotdata, aes(x =Importance, y = Variable,fill = Variable)) + 
-  geom_boxplot(outlier.colour = "grey90")+#颜色填充
-  theme_bw()+  #去掉背景色
-  theme(legend.position="none")+   #去掉legend
-  scale_fill_manual(values = mycolor)+ # 设置自定义填充色
-  theme(panel.grid.major=element_blank(),
-        panel.grid.minor=element_blank(),
-        axis.text.x = element_text(size = 6,color="black"),
-        axis.text.y = element_text(size = 8,color="black"))            #移除网格线 (但不移除背景颜色和边界线)
-p1
-#保存
-ggsave("./Boruta重要特征.pdf",p1,width = 6,height = 10)
+
 
 
 #提取重要的变量
@@ -168,6 +267,8 @@ newddtest <- newddtest[,-1]
 #导出
 write.table(newddtest,file="Boruta_variablelist_test.txt",sep="\t",quote=F,col.names=T)
 #save.image('boruta结果.RData')
+
+
 ####2.lasso#####
 data_train$diagnosis <- as.numeric(as.character(data_train$diagnosis))
 #构建模型(第二列开始是自变量)

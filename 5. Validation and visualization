@@ -386,10 +386,10 @@ roc_lgb <- roc(data$diagnosis, as.numeric(prob_lgb))
 # 计算AUC值
 auc_lr <- roc_lr$auc # AUC 0.704, 0.596-0.739
 auc_rf <- roc_rf$auc # 0.828, 0.710-0.835
-auc_svm <- roc_svm$auc # 0.744, 0.681-0.725
+auc_svm <- roc_svm$auc # 0.744, 0.565-0.782
 auc_xgb <- roc_xgb$auc # 0.828, 0.739-0.844
 auc_lgb <- roc_lgb$auc #0.813, 0.623-0.881
-#roc_dnn, 0.844, 0.783-0.849
+roc_dnn, 0.844, 0.783-0.849
 
 #save.image('ML的相关结果.RData')
 

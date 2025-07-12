@@ -1,4 +1,4 @@
-# Decent_app
+# Decentapp
 the code for the paper about the prediction model of organ failure among acute pancreatitis patients.
 This paper used open accessed database, MIMIC-IV which does not allow us to share the data. The reader need to pass the exam of certification and request data from MIMIC.
 For the validation cohort, Xiangya pancreatitis cohorts, please contect the corresponding authors.

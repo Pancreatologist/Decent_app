@@ -28,9 +28,8 @@ scale_pos_weight <- positive_count / negative_count #0.3127464
 data_train$diagnosis <- as.factor(data_train$diagnosis)
 set.seed(2025)
 recipe_spec <- recipe(diagnosis ~ ., data = data_train) %>%
-  themis::step_smote(diagnosis, over_ratio = 0.5) %>%
   step_corr(all_numeric_predictors(), 
-            threshold = 0.8,  
+            threshold = 0.7,  
             method = "pearson") %>%
   step_normalize(all_numeric_predictors()) %>% prep()
 

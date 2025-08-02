@@ -732,3 +732,23 @@ p1 <- sv_waterfall(shap_value_dnn,row_id=1L)
 p2 <- sv_importance(shap_value_dnn,kind="beeswarm")
 p3 <- sv_dependence(shap_value_dnn,xvars)
 (p1+p2)/p3
+
+heatmap_shap <- shap_value_dnn$X 
+corr <- round(cor(heatmap_shap), 1) 
+
+# 创建一个对角线为NA的相关系数矩阵
+corr_no_diag <- corr
+diag(corr_no_diag) <- NA
+
+# 创建一个对角线为1的p值矩阵
+res <- cor.mtest(heatmap_shap, conf.level = .95)
+p <- res$p
+diag(p) <- 1
+
+# 使用pie方法绘制，标签贴左边边框
+corrplot(corr_no_diag, method = "pie", type = "upper", 
+         p.mat = p, sig.level = c(.001, .01, .05), 
+         insig = "label_sig", pch.cex = 1.2, 
+         pch.col = 'black', diag = FALSE, 
+         mar = c(0, 0, 0, 0), tl.cex = 0.8)
+

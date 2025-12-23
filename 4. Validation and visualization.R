@@ -5,6 +5,9 @@ library(ResourceSelection)
 library(dcurves)
 library(gtsummary)
 library(cowplot)
+library(readxl)
+library(Hmisc)
+library(corrplot)
 results <- readxl::read_xlsx('20250711带BISAP.xlsx')
 
 results$diagnosis <- factor(results$diagnosis,levels = c(0, 1))
@@ -130,7 +133,7 @@ conf_plot_rf <- ggplot(conf_matrix_df_rf, aes(x =Reference, y = Prediction, fill
 conf_plot_rf
 
 # 保存图片
-ggsave("./混淆矩阵_rf.pdf", conf_plot_lr, width = 6, height = 6)
+ggsave("./混淆矩阵_rf.pdf", conf_plot_rf, width = 6, height = 6)
 
 ###支持向量机 预测结果#######
 prob_svm <- ifelse(results$svm > 0.5, 1, 0)  
@@ -190,7 +193,7 @@ conf_plot_svm <- ggplot(conf_matrix_df_svm, aes(x =Reference, y = Prediction, fi
 conf_plot_svm
 
 # 保存图片
-ggsave("./混淆矩阵_svm.pdf", conf_plot_lr, width = 6, height = 6)
+ggsave("./混淆矩阵_svm.pdf", conf_plot_svm, width = 6, height = 6)
 
 
 
@@ -690,65 +693,74 @@ plot_clinical_impact(dca.result_xgb, col = "#7D5CC6FF",
 
 
 #-----5.shap可视化-----
+# 注意：SHAP可视化需要加载模型和数据，当前文件中未定义这些变量
+# 请在运行此部分之前确保已经加载了以下变量：
+# 1. train_transformed - 训练集数据
+# 2. test_transformed - 测试集数据
+# 3. final_xgb_fit - 训练好的XGBoost模型
 
-#加载模型
-library(kernelshap)
-library(shapviz)
-library(ggplot2)
+# 以下代码需要在上述变量定义后才能运行
+# 这里暂时注释掉
 
-#分组变量转为因子
-data <- train_transformed
-data$diagnosis <- as.factor(data$diagnosis)
-data_test <- test_transformed
-data_test$diagnosis <- as.factor(data_test$diagnosis)
-str(data)
-#分离特征和应变量
-target <- "diagnosis"
-features <- data[, -which(names(data) == "diagnosis")]
+#library(kernelshap)
+#library(shapviz)
+#library(ggplot2)
+
+# 分组变量转为因子
+#data <- train_transformed
+#data$diagnosis <- as.factor(data$diagnosis)
+#data_test <- test_transformed
+#data_test$diagnosis <- as.factor(data_test$diagnosis)
+#str(data)
+
+# 分离特征和应变量
+#target <- "diagnosis"
+#features <- data[, -which(names(data) == "diagnosis")]
+
 # 设置样本量和准备数据
-n <- 1429  # 样本量
-testdata_matrix <- as.matrix(data_test[1:n, -1])
-bg_X_matrix <- as.matrix(data[1:n, -1])  # 背景数据集
+#n <- 1429  # 样本量
+#testdata_matrix <- as.matrix(data_test[1:n, -1])
+#bg_X_matrix <- as.matrix(data[1:n, -1])  # 背景数据集
 
 #xgbmodel
-explain_kernel_dnn <- kernelshap(final_xgb_fit, 
-                                 testdata_matrix, 
-                                 bg_X = bg_X_matrix)  #有验证集的时候用验证集
-shap_value_dnn <- shapviz(explain_kernel_dnn,
-                          data[1:n, -1], which_class = 2,
-                          interactions=TRUE) 
-sv_interaction(shap_value_dnn)
-sv_importance(shap_value_dnn)
+#explain_kernel_dnn <- kernelshap(final_xgb_fit, 
+#                                 testdata_matrix, 
+#                                 bg_X = bg_X_matrix)  #有验证集的时候用验证集
+#shap_value_dnn <- shapviz(explain_kernel_dnn,
+#                          data[1:n, -1], which_class = 2,
+#                          interactions=TRUE) 
+#sv_interaction(shap_value_dnn)
+#sv_importance(shap_value_dnn)
 
 
-xvars <- c('platelets','wbc','albumin',"bun","ptt","TyG") 
+#xvars <- c('platelets','wbc','albumin',"bun","ptt","TyG") 
 
 
-sv_dependence(shap_value_dnn,
-              v= 'TyG')
+#sv_dependence(shap_value_dnn,
+#              v= 'TyG')
 
-sv_force(shap_value_dnn,row_id=1)
-p1 <- sv_waterfall(shap_value_dnn,row_id=1L)
-p2 <- sv_importance(shap_value_dnn,kind="beeswarm")
-p3 <- sv_dependence(shap_value_dnn,xvars)
-(p1+p2)/p3
+#sv_force(shap_value_dnn,row_id=1)
+#p1 <- sv_waterfall(shap_value_dnn,row_id=1L)
+#p2 <- sv_importance(shap_value_dnn,kind="beeswarm")
+#p3 <- sv_dependence(shap_value_dnn,xvars)
+#(p1+p2)/p3
 
-heatmap_shap <- shap_value_dnn$X 
-corr <- round(cor(heatmap_shap), 1) 
+#heatmap_shap <- shap_value_dnn$X 
+#corr <- round(cor(heatmap_shap), 1) 
 
 # 创建一个对角线为NA的相关系数矩阵
-corr_no_diag <- corr
-diag(corr_no_diag) <- NA
+#corr_no_diag <- corr
+#diag(corr_no_diag) <- NA
 
 # 创建一个对角线为1的p值矩阵
-res <- cor.mtest(heatmap_shap, conf.level = .95)
-p <- res$p
-diag(p) <- 1
+#res <- cor.mtest(heatmap_shap, conf.level = .95)
+#p <- res$p
+#diag(p) <- 1
 
 # 使用pie方法绘制，标签贴左边边框
-corrplot(corr_no_diag, method = "pie", type = "upper", 
-         p.mat = p, sig.level = c(.001, .01, .05), 
-         insig = "label_sig", pch.cex = 1.2, 
-         pch.col = 'black', diag = FALSE, 
-         mar = c(0, 0, 0, 0), tl.cex = 0.8)
+#corrplot(corr_no_diag, method = "pie", type = "upper", 
+#         p.mat = p, sig.level = c(.001, .01, .05), 
+#         insig = "label_sig", pch.cex = 1.2, 
+#         pch.col = 'black', diag = FALSE, 
+#         mar = c(0, 0, 0, 0), tl.cex = 0.8)
 

@@ -102,10 +102,10 @@ AP_ALL <- AP_ALL %>%
     across(all_of(time_cols), first),
     across(all_of(categorical_cols), first),
     across(where(is.numeric) & !any_of(c("subject_id", time_cols)), max, na.rm = TRUE)
-  )
-table(AP_ALL$AKI)
+
 AP_d1 <- read.table('20250324AP患者第一天生命体征.csv', header = TRUE, sep = ",")
 summary(AP_d1)
 ids_to_remove <- AP_d1$subject_id[AP_d1$COF == 1]
+tmp1 <- AP_ALL
 tmp2 <- tmp1[!tmp1$subject_id %in% ids_to_remove,]
 write.csv(tmp2, file = "20250323AP患者发生OF但第一天没有OF.csv", row.names = FALSE)

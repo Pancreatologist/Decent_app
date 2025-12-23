@@ -5,94 +5,109 @@ library(ResourceSelection)
 library(dcurves)
 library(gtsummary)
 library(cowplot)
+library(readxl)
+library(writexl)
+
+# 注意：以下代码引用了在前面文件中定义的变量和模型
+# 请在运行此文件之前确保已经运行了前面的文件，或者定义了以下变量：
+# 1. final_logistic_fit - 训练好的逻辑回归模型
+# 2. final_svm_fit - 训练好的SVM模型
+# 3. final_xgb_fit - 训练好的XGBoost模型
+# 4. final_rf_fit - 训练好的随机森林模型
+# 5. nnet_fit - 训练好的神经网络模型
+# 6. final_lgbm_fit - 训练好的LightGBM模型
+# 7. test_transformed - 转换后的测试集数据
+
+# 以下代码需要在上述变量定义后才能运行
+# 这里暂时注释掉
 
 ###logistic
-predictions_logistic <- predict(final_logistic_fit, new_data = test_transformed, type = "prob")
-predictions_logistic_preds <- test_transformed |>
-  bind_cols(predictions_logistic )
+#predictions_logistic <- predict(final_logistic_fit, new_data = test_transformed, type = "prob")
+#predictions_logistic_preds <- test_transformed |> 
+#  bind_cols(predictions_logistic )
 
-recal_object_lr <- test_transformed |>
-  bind_cols(predictions_logistic) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
+#recal_object_lr <- test_transformed |> 
+#  bind_cols(predictions_logistic) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
 
-recal_logistic_preds <- predict(final_logistic_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_lr) 
+#recal_logistic_preds <- predict(final_logistic_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_lr) 
 
 ###svm
-predictions_svm <- predict(final_svm_fit, new_data = test_transformed, type = "prob")
-predictions_svm_preds <- test_transformed |>
-  bind_cols(predictions_svm )
-recal_object_svm <- test_transformed |>
-  bind_cols(predictions_svm) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
-recal_svm_preds <- predict(final_svm_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_svm) 
+#predictions_svm <- predict(final_svm_fit, new_data = test_transformed, type = "prob")
+#predictions_svm_preds <- test_transformed |> 
+#  bind_cols(predictions_svm )
+#recal_object_svm <- test_transformed |> 
+#  bind_cols(predictions_svm) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
+#recal_svm_preds <- predict(final_svm_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_svm) 
 
 ###xgboost
-predictions_xgb <- predict(final_xgb_fit, new_data = test_transformed, type = "prob")
-predictions_xgb_preds <- test_transformed |>
-  bind_cols(predictions_xgb )
-recal_object_xgb <- test_transformed |>
-  bind_cols(predictions_xgb) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
-recal_xgb_preds <- predict(final_xgb_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_xgb) 
+#predictions_xgb <- predict(final_xgb_fit, new_data = test_transformed, type = "prob")
+#predictions_xgb_preds <- test_transformed |> 
+#  bind_cols(predictions_xgb )
+#recal_object_xgb <- test_transformed |> 
+#  bind_cols(predictions_xgb) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
+#recal_xgb_preds <- predict(final_xgb_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_xgb) 
 
 ###rf
-predictions_rf <- predict(final_rf_fit, new_data = test_transformed, type = "prob")
-predictions_rf_preds <- test_transformed |>
-  bind_cols(predictions_rf )
-recal_object_rf <- test_transformed |>
-  bind_cols(predictions_rf) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
-recal_rf_preds <- predict(final_rf_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_rf) 
+#predictions_rf <- predict(final_rf_fit, new_data = test_transformed, type = "prob")
+#predictions_rf_preds <- test_transformed |> 
+#  bind_cols(predictions_rf )
+#recal_object_rf <- test_transformed |> 
+#  bind_cols(predictions_rf) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
+#recal_rf_preds <- predict(final_rf_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_rf) 
 
 ###dnn
-predictions_dnn <- predict(nnet_fit, new_data = test_transformed, type = "prob")
-predictions_dnn_preds <- test_transformed |>
-  bind_cols(predictions_dnn )
-recal_object_dnn <- test_transformed |>
-  bind_cols(predictions_dnn) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
-recal_dnn_preds <- predict(nnet_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_dnn) 
+#predictions_dnn <- predict(nnet_fit, new_data = test_transformed, type = "prob")
+#predictions_dnn_preds <- test_transformed |> 
+#  bind_cols(predictions_dnn )
+#recal_object_dnn <- test_transformed |> 
+#  bind_cols(predictions_dnn) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
+#recal_dnn_preds <- predict(nnet_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_dnn) 
 
 ###lighGBM
-predictions_lgbm <- predict(final_lgbm_fit, new_data = test_transformed, type = "prob")
-predictions_lgbm_preds <- test_transformed |>
-  bind_cols(predictions_lgbm)
-recal_object_lgbm <- test_transformed |>
-  bind_cols(predictions_lgbm) |>
-  cal_estimate_logistic(truth = diagnosis,
-                        estimate = starts_with(".pred"),
-                        smooth = FALSE)
-recal_lgbm_preds <- predict(final_lgbm_fit, new_data = test_transformed, type = "prob")|>
-  cal_apply(recal_object_lgbm) 
+#predictions_lgbm <- predict(final_lgbm_fit, new_data = test_transformed, type = "prob")
+#predictions_lgbm_preds <- test_transformed |> 
+#  bind_cols(predictions_lgbm)
+#recal_object_lgbm <- test_transformed |> 
+#  bind_cols(predictions_lgbm) |> 
+#  cal_estimate_logistic(truth = diagnosis,
+#                        estimate = starts_with(".pred"),
+#                        smooth = FALSE)
+#recal_lgbm_preds <- predict(final_lgbm_fit, new_data = test_transformed, type = "prob")|> 
+#  cal_apply(recal_object_lgbm) 
 
 
-recal_logistic_pred <- recal_logistic_preds  %>% select(.pred_1) %>% rename(recal_logistic = .pred_1)
-recal_svm_pred <- recal_svm_preds  %>% select(.pred_1) %>% rename(recal_svm = .pred_1)
-recal_xgb_pred <- recal_xgb_preds %>% select(.pred_1) %>% rename(recal_xgb = .pred_1)
-recal_rf_pred <- recal_rf_preds %>% select(.pred_1) %>% rename(recal_rf = .pred_1)
-recal_dnn_pred <- recal_dnn_preds  %>% select(.pred_1) %>% rename(recal_dnn = .pred_1)
-recal_lgbm_pred <- recal_lgbm_preds %>% select(.pred_1) %>% rename(recal_lgbm = .pred_1)
-recal_final_preds <- bind_cols(recal_logistic_pred, recal_svm_pred,
-                               recal_xgb_pred, recal_rf_pred,
-                               recal_dnn_pred, recal_lgbm_pred) %>% 
-  mutate(diagnosis=test_transformed$diagnosis)
+#recal_logistic_pred <- recal_logistic_preds  %>% select(.pred_1) %>% rename(recal_logistic = .pred_1)
+#recal_svm_pred <- recal_svm_preds  %>% select(.pred_1) %>% rename(recal_svm = .pred_1)
+#recal_xgb_pred <- recal_xgb_preds %>% select(.pred_1) %>% rename(recal_xgb = .pred_1)
+#recal_rf_pred <- recal_rf_preds %>% select(.pred_1) %>% rename(recal_rf = .pred_1)
+#recal_dnn_pred <- recal_dnn_preds  %>% select(.pred_1) %>% rename(recal_dnn = .pred_1)
+#recal_lgbm_pred <- recal_lgbm_preds %>% select(.pred_1) %>% rename(recal_lgbm = .pred_1)
+#recal_final_preds <- bind_cols(recal_logistic_pred, recal_svm_pred,
+#                               recal_xgb_pred, recal_rf_pred,
+#                               recal_dnn_pred, recal_lgbm_pred) %>% 
+#  mutate(diagnosis=test_transformed$diagnosis)
 
-writexl::write_xlsx(recal_final_preds,'20250717_recal.xlsx')
+#writexl::write_xlsx(recal_final_preds,'20250717_recal.xlsx')
 
 results <- readxl::read_xlsx('20250717_recal带BISAP.xlsx')
 

@@ -172,7 +172,7 @@ feature_medians <- plotdata %>% group_by(feature) %>% summarise(
   min_imp = min(importance),
   max_imp = max(importance)) %>% arrange(desc(median_imp))
 # 再次确认只保留 Confirmed 变量
-plotdata <- importance_long %>% filter(decision == "Confirmed")
+plotdata <- importance_long %>% filter(decision == "Confirmed")
 # 再次检查 Confirmed 变量是否存在
 if(nrow(plotdata) == 0) { stop("没有找到 Confirmed 变量，请检查 Boruta 结果。") }
 # 重新按中位数重要性排序特征因子
@@ -233,12 +233,12 @@ ggsave("enhanced_confirmed_features_ridge.pdf", ridge_plot, width = 12, height =
 
 
 #boruta重要性
-boruta.variable.imp <- boruta.imp(fs)
+boruta.variable.imp <- attStats(fs)
 #导出
 write.table(boruta.variable.imp,'boruta.importance.txt',quote =F,sep="\t",row.names=T)
 #只绘制Confirmed变量
 #提取出Confirmed变量的数据集
-plotdata <- boruta.variable.imp %>% filter(finalDecision=="Confirmed")
+plotdata <- importance_df %>% filter(finalDecision=="Confirmed")
 
 
 
@@ -252,26 +252,27 @@ select.name # 随机森林参数设置不同，结果有明显区别。选择分
 
 boruta.name <- select.name
 #提取筛选出的变量
-newdd <- merge(data_train[1],data_train[select.name],by = "row.names",all = F)
+newdd <- merge(data_train[1], data_train[select.name], by = "row.names", all = F)
 #第一列变为列名
 rownames(newdd) <- newdd[,1]
 newdd <- newdd[,-1]
 #导出
-write.table(newdd,file="Boruta_variablelist.txt",sep="\t",quote=F,col.names=T)
+write.table(newdd, file="Boruta_variablelist.txt", sep="\t", quote=F, col.names=T)
 
-newddtest <- merge(data_test[1],data_test[select.name],by = "row.names",all = F)
+
+newddtest <- merge(data_test[1], data_test[select.name], by = "row.names", all = F)
 #第一列变为列名
 rownames(newddtest) <- newddtest[,1]
 newddtest <- newddtest[,-1]
 #导出
-write.table(newddtest,file="Boruta_variablelist_test.txt",sep="\t",quote=F,col.names=T)
+write.table(newddtest, file="Boruta_variablelist_test.txt", sep="\t", quote=F, col.names=T)
 #save.image('boruta结果.RData')
 
 
 ####2.lasso#####
 data_train$diagnosis <- as.numeric(as.character(data_train$diagnosis))
 #构建模型(第二列开始是自变量)
-x=as.matrix(data_train[,c(2:ncol(data_train))])
+x=as.matrix(data_train[,c(2:ncol(data_train)])
 x <- apply(x, 2, as.numeric)
 # 第一列是分组
 y=data_train[,1]
@@ -284,7 +285,7 @@ fit=glmnet(x, y, family = "binomial", alpha=1)
 plot(fit, xvar="lambda", label=T)
 #10折交叉验证
 set.seed(1234)
-cvfit=cv.glmnet(x, y, family="binomial", alpha=1,nfolds = 10)
+cvfit=cv.glmnet(x, y, family="binomial", alpha=1, nfolds = 10)
 pdf(file="cvfit.pdf",width=6,height=5.5)
 plot(cvfit)
 dev.off()
@@ -296,12 +297,12 @@ lambda.1se <- cvfit$lambda.1se
 lambda.min
 lambda.1se
 #指定λ值重新构建模型(通过λ值筛选基因)：
-model_lasso_min <- glmnet(x, y, alpha = 1, lambda = lambda.min,family = "binomial")
-model_lasso_1se <- glmnet(x, y, alpha = 1, lambda = lambda.1se,family = "binomial")
+model_lasso_min <- glmnet(x, y, alpha = 1, lambda = lambda.min, family = "binomial")
+model_lasso_1se <- glmnet(x, y, alpha = 1, lambda = lambda.1se, family = "binomial")
 #拎出模型使用的变量(存放在beta中)：
-head(model_lasso_min$beta)#"."表示这个变量没有被使用
+head(model_lasso_min$beta)#" . "表示这个变量没有被使用
 #使用as.numeric把.转化为0，然后通过筛选非0的方式将构建模型所使用的变量提取出来。
-ID_min <- rownames(model_lasso_min$beta)[as.numeric(model_lasso_min$beta)!=0]#as.numeric后"."会转化为0
+ID_min <- rownames(model_lasso_min$beta)[as.numeric(model_lasso_min$beta)!=0]
 length(ID_min)
 ID_1se <- rownames(model_lasso_1se$beta)[as.numeric(model_lasso_1se$beta)!=0]
 length(ID_1se)
@@ -309,53 +310,53 @@ length(ID_1se)
 newdd <- data_train[ID_1se]
 #添加分组
 #根据ID,合并
-newdd = merge(data_train$diagnosis,newdd,by = "row.names",all = F)
+newdd = merge(data_train$diagnosis, newdd, by = "row.names", all = F)
 #第一列变为列名
 rownames(newdd) <- newdd[,1]
 newdd <- newdd[,-1]
 library(dplyr)
 newdd <- newdd %>% rename(diagnosis = x)
-
+out=rbind(ID=colnames(newdd), newdd)
 #导出
-out=rbind(ID=colnames(newdd),newdd)
-write.table(out,file="Lasso_variablelist_min.txt",sep="\t",quote=F,col.names=F)
+write.table(out, file="Lasso_variablelist_min.txt", sep="\t", quote=F, col.names=F)
 
 
-newddtest <- merge(data_test[1],data_test[ID_min],by = "row.names",all = F)
+
+newddtest <- merge(data_test[1], data_test[ID_min], by = "row.names", all = F)
 #第一列变为列名
 rownames(newddtest) <- newddtest[,1]
 newddtest <- newddtest[,-1]
 #导出
-write.table(newddtest,file="Lasso_variablelist_test.txt",sep="\t",quote=F,col.names=T)
+write.table(newddtest, file="Lasso_variablelist_test.txt", sep="\t", quote=F, col.names=T)
 save.image('LASSO结果.RData')
 ### 取boruta跟LASSO的交集
-interesect.name <- intersect(boruta.name,ID_1se)
-newdd <- data_train[interesect.name]
+intersect.name <- intersect(boruta.name, ID_1se)
+newdd <- data_train[intersect.name]
 
 #添加分组
 #根据ID,合并
-newdd = merge(data_train$diagnosis,newdd,by = "row.names",all = F)
+newdd = merge(data_train$diagnosis, newdd, by = "row.names", all = F)
 #第一列变为列名
 rownames(newdd) <- newdd[,1]
 newdd <- newdd[,-1]
 library(dplyr)
 newdd <- newdd %>% rename(diagnosis = x)
-out=rbind(ID=colnames(newdd),newdd)
+out=rbind(ID=colnames(newdd), newdd)
 #导出
-write.table(out,file="boruta跟LASSO的交集_训练集.txt",sep="\t",quote=F,col.names=F)
-interesect.name <- c("age" ,"platelets_max","albumin_min","bun_min",
+write.table(out, file="boruta跟LASSO的交集_训练集.txt", sep="\t", quote=F, col.names=F)
+
+intersect.name <- c("age" ,"platelets_max","albumin_min","bun_min",
        "calcium_min","potassium_min","abs_monocytes_max","abs_neutrophils_min",
        "pt_max","ptt_max","ld_ldh_min")
-newddtest <- merge(data_test[1],data_test[interesect.name],by = "row.names",all = F)
+newddtest <- merge(data_test[1], data_test[intersect.name], by = "row.names", all = F)
 #第一列变为列名
 rownames(newddtest) <- newddtest[,1]
 newddtest <- newddtest[,-1]
 #导出
-write.table(newddtest,file="boruta跟LASSO的交集_测试集.txt",sep="\t",quote=F,col.names=T)
-#save.image('boruta跟LASSO的交集.RData')
+write.table(newddtest, file="boruta跟LASSO的交集_测试集.txt", sep="\t", quote=F, col.names=T)
+save.image('boruta跟LASSO的交集.RData')
 
-
-######二、模型构建######
+### 二、模型构建######
 library(tidymodels)
 library(probably)
 library(future) # 用于并行计算

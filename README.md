@@ -7,7 +7,7 @@ The project develops and externally validates an XGBoost-based model to predict 
 Repository Structure
 File	Description
 1. Extract the data from MIMIC-IV.sql	SQL queries to extract the discovery cohort from the MIMIC‑IV database.
-2. Pre-process and clean the data.R	Data cleaning, missing value imputation, winsorization, and TyG index calculation.
+2. Pre-process and clean the data.R	Data cleaning, missing value imputation and TyG index calculation.
 3. Feature selection and machine learning	Feature selection (Boruta + LASSO) and training of six models (elastic net, SVM, random forest, XGBoost, LightGBM, neural network).
 4. Validation and visualization.R	External validation, ROC curves, calibration plots, decision curve analysis, and SHAP interpretation.
 5. Model updating (recalibration).R	Logistic recalibration of models on the validation cohort.

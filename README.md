@@ -37,11 +37,7 @@ The interactive Shiny app is available at: https://wudikdfz.shinyapps.io/Decenta
 Source code for the app is in a separate repository: Pancreatologist/Decent_app.
 
 Data Availability
-MIMIC‑IV is publicly available but requires registration. The SQL script is provided for replication.
-
-Processed discovery cohort data is included as discovery cohort data.xlsx for transparency.
-
-The validation cohort (Xiangya hospitals) data cannot be made public due to institutional policies; anonymized data are available upon reasonable request to the corresponding authors.
+The discovery dataset about MIMIC-IV data is reposited in the PhysioNet (https://doi.org/10.13026/kpb9-mt58) without sharing it ourselves due to the license for these data (https://physionet.org/content/mimiciv/view-license/3.1/). Part of MIMIC-IV was granted access to the MIMIC-IV databases where one of the authors (Di Wu, No. 55097674) passed the Collaborative Institutional Training Initiative program exam giving them access to the database. The validation dataset, from Xiangya and Third Xiangya hospital, is available from the corresponding authors on reasonable request to the Ethics Committee of Xiangya hospital and Third Xiangya hospital. Once the request received, the corresponding authors will deliver to the the Ethics Committee. 
 
 Citation
 If you use this code or the model in your research, please cite our manuscript (once published). For now, you can reference this repository:

@@ -1,0 +1,592 @@
+######一、特征选择######
+####1.boruta#####
+rm(list=ls())
+library(ggsci)
+library(here)
+library(AppliedPredictiveModeling)
+library(tidymodels)
+library(ROSE)
+library(smotefamily)
+library(themis)
+
+predictors <- readxl::read_excel('最终数据表_mice后没有肌酐没有血糖.xlsx')
+colnames(predictors)
+colnames(predictors)[28]
+colnames(predictors)[28] <- 'diagnosis'
+predictors$diagnosis <- factor(predictors$diagnosis, levels = c(0,1))
+data <- predictors[,c(28,31:82)] #分组变量放前面
+set.seed(202566)
+data_total <- data  %>%  
+  initial_split(prop = 0.8, strata = diagnosis) 
+data_train <- training(data_total) #训练集
+data_test <- testing(data_total) # 测试集
+# 计算样本权重
+positive_count <- sum(data_train$diagnosis == 1)
+negative_count <- sum(data_train$diagnosis == 0)
+scale_pos_weight <- negative_count / positive_count #3.197479
+scale_pos_weight <- positive_count / negative_count #0.3127464
+data_train$diagnosis <- as.factor(data_train$diagnosis)
+set.seed(2025)
+recipe_spec <- recipe(diagnosis ~ ., data = data_train) %>%
+  step_corr(all_numeric_predictors(), 
+            threshold = 0.7,  
+            method = "pearson") %>%
+  step_normalize(all_numeric_predictors()) %>% prep()
+
+recipe_spec %>%
+  bake(new_data = NULL) %>%
+  count(diagnosis, name = "training")
+
+# 3. 将训练好的转换应用到训练集和测试集
+train_transformed <- bake(recipe_spec, new_data =NULL)
+test_transformed <- bake(recipe_spec, new_data = data_test)
+
+
+filter_variable <- colnames(train_transformed) 
+filter_variable <- c("diagnosis", filter_variable[filter_variable != "diagnosis"])
+data_train <-train_transformed[filter_variable]
+
+#测试集的
+filter_variable <- colnames(test_transformed)
+filter_variable <- c("diagnosis", filter_variable[filter_variable != "diagnosis"])
+data_test <- test_transformed[filter_variable]
+
+#### Boruta
+#替换为自己的数据读取
+#因子化
+str(data_train$diagnosis)
+library(Boruta)
+#pValue 指定置信水平，mcAdj=TRUE 意为将应用 Bonferroni 方法校正 p 值
+#此外还可以提供 mtry 和 ntree 参数的值，这些值将传递给随机森林函数 randomForest()
+#大部分参数使用默认值
+set.seed(202566)
+fs = Boruta(data_train[,-1],data_train$diagnosis,
+            ###通过降低pValue或增加maxRuns，可以更好的区分tentative特征###
+            pValue = 0.001,# 筛选阈值，默认0.01
+            ### 迭代最大次数,先试运行一下，如果迭代完之后，还留有变量，则下次运行，增大迭代次数。##
+            maxRuns = 1000,
+            mcAdj = TRUE, # Bonferroni方法进行多重比较校正
+            doTrace = 2,# 跟踪算法进程
+            holdHistory = TRUE, # TRUE,则将所有运行历史保存在结果的ImpHistory部分
+            ##getImp设置获取特征重要性值的方法,可以赋值为自己写的功能函数名##
+            ##需要设置优化参数,?getImpLegacyRf，查看更多参数设置注意事项##
+            getImp =getImpLegacyRfGini,
+            ##getImpRfZ()使用ranger进行随机森林分析，获得特征重要性值，默认返回mean decrease accuracy的Z-scores。##
+            ##getImpRfRaw()使用ranger进行随机森林分析,默认返回原始置换重要性结果##
+            ##getImpRfGini()使用ranger进行随机森林分析,默认返回Gini指数重要性结果##
+            ##getImpLegacyRfZ()使用randomForest进行随机森林分析,默认返回均一化的分类准确性重要性结果##
+            ##getImpLegacyRfRaw()使用randomForest进行随机森林分析,默认返回原始置换重要性结果##
+            ##getImpLegacyRfGini()使用randomForest进行随机森林分析,默认返回Gini指数重要性结果##
+            ##getImpFerns()使用rFerns包进行Random Ferns importance计算特征的重要性。它的运行速度比随机森林更快，必须优化depth参数，且可能需要的迭代次数更多##
+            ##另外还有getImpXgboost,getImpExtraGini,getImpExtraZ,getImpExtraRaw等设置选项##
+            ##参数设置为之前随机森林的调参结果,参数会传递给RandomForest函数##
+            #importance = TRUE,
+            #ntree=500,maxnodes=7, # 注释掉此句，使用默认参数进行变量筛选
+            #mtry = 36 
+            ##随着迭代的进行，剩余特征变量数<80后，函数会报警告信息，后续的迭代mtry将恢复默认值##
+            ##介意warning信息，可以不用设置mtry##
+)
+
+table(fs$finalDecision) 
+boruta_result <- fs
+# 绘制 Boruta 重要性历史图
+Boruta::plotImpHistory(boruta_result)
+# 获取 Boruta 重要性并整理数据
+importance_df <- attStats(boruta_result)
+importance_df$feature <- rownames(importance_df)
+# 过滤出非阴影特征并进行数据转换
+importance_df <- importance_df %>% filter(!grepl("^shadow", feature))
+importance_long <- as.data.frame(boruta_result$ImpHistory) %>%
+  pivot_longer(cols = everything(),
+               names_to ="feature",
+               values_to ="importance") %>%
+  filter(!grepl("^shadow", feature)) %>% # 过滤掉阴影特征
+  mutate(feature = gsub("^X","", feature)) %>% # 清理特征名称
+  left_join(
+    data.frame(
+      feature = names(boruta_result$finalDecision),
+      decision = factor(boruta_result$finalDecision,
+                        levels = c("Confirmed","Tentative","Rejected"))
+    ),
+    by ="feature"
+  )
+# 计算每个特征的中位数重要性用于排序
+feature_medians <- importance_long %>% group_by(feature) %>% summarise(
+  median_imp = median(importance, na.rm = TRUE),
+  decision = first(decision)) %>% arrange(desc(median_imp))
+# 按中位数重要性重新排序特征因子
+importance_long <- importance_long %>% mutate(feature = factor(feature, levels = feature_medians$feature))
+confirmed_color <-"#79C377"# 绿色
+tentative_color <-"#fdae61"# 橙黄色
+rejected_color <-"#d7191c"# 红色
+
+feature_colors <- data.frame(feature = levels(importance_long$feature),
+                             stringsAsFactors = FALSE) %>%
+  left_join(importance_long %>% select(feature, decision) %>% distinct(), by ="feature") %>%
+  mutate(color_code = case_when(
+    decision =="Confirmed"~ confirmed_color,
+    decision =="Tentative"~ tentative_color,
+    decision =="Rejected"~ rejected_color),
+    colored_label = sprintf("<span style='color:%s; font-weight:bold'>%s</span>", color_code, feature)
+  )
+
+decision_plot <- ggplot(importance_long, aes(x = feature, y = importance, fill = decision)) +
+  geom_boxplot(width = 0.7, alpha = 0.85, outlier.size = 1.5, outlier.color ="#404040",
+               outlier.alpha = 0.6, notch = FALSE) +
+  geom_hline(yintercept = 0, color ="grey50", linetype ="dashed") +
+  scale_fill_manual(values = c("Confirmed"= confirmed_color,"Tentative"= tentative_color,
+                               "Rejected"= rejected_color), name ="Feature Status") +
+  scale_x_discrete(labels = setNames(feature_colors$colored_label, feature_colors$feature)) +
+  scale_y_continuous(expand = expansion(mult = c(0.02, 0.02))) +
+  labs(title ="Boruta Feature Importance Analysis", x ="Variable", y ="Importance") +
+  theme_minimal(base_size = 12) +
+  theme(panel.border = element_rect(color ="black", fill = NA, linewidth = 0.8),
+        axis.text.x = element_markdown(angle = 45, hjust = 1, vjust = 1),
+        axis.title = element_text(face ="bold"),
+        plot.title = element_markdown(size = 16, face ="bold", hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5, color ="grey30", size = 11),
+        axis.text.y = element_text(color ="black"),
+        axis.title.x = element_text(margin = unit(c(10, 0, 0, 0),"pt"), color ="grey30"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        legend.position ="top",
+        legend.title = element_text(face ="bold"),
+        plot.background = element_rect(fill ="white", color = NA),
+        plot.margin = unit(c(15, 20, 25, 15),"pt"),
+        plot.caption = element_text(color ="grey50", size = 8)) 
+# 显示并保存常规重要性结果图
+print(decision_plot)
+#保存
+ggsave("./Boruta重要特征.pdf", decision_plot,width = 10,height = 5)
+
+
+
+
+plotdata <- importance_long %>% filter(decision =="Confirmed")
+# 检查 Confirmed 变量是否存在
+if(nrow(plotdata) == 0) { stop("没有找到 Confirmed 变量，请检查 Boruta 结果。") }
+# 计算每个 Confirmed 特征的中位数重要性等统计指标用于排序
+feature_medians <- plotdata %>% group_by(feature) %>% summarise(
+  median_imp = median(importance, na.rm = TRUE),
+  mean_imp = mean(importance, na.rm = TRUE),
+  min_imp = min(importance),
+  max_imp = max(importance)) %>% arrange(desc(median_imp))
+# 再次确认只保留 Confirmed 变量
+plotdata <- importance_long %>% filter(decision == "Confirmed")
+# 再次检查 Confirmed 变量是否存在
+if(nrow(plotdata) == 0) { stop("没有找到 Confirmed 变量，请检查 Boruta 结果。") }
+# 重新按中位数重要性排序特征因子
+plotdata <- plotdata %>% mutate(feature = factor(feature, levels = feature_medians$feature))
+# 设置增强的配色方案
+confirmed_color <-"#79C377" # 基础绿色
+gradient_colors <- colorRampPalette(c("#BEE3BB","#347A32"))(length(unique(plotdata$feature)))
+darker_green <-"#2A5C2A"# 更深绿色用于线条
+highlight_color <-"#E74C3C"# 突出显示色（红色）用于重要标记
+grid_color <-"#E0E0E0"# 网格线颜色
+# 创建增强版 Confirmed 特征重要性山脊图
+ridge_plot <- ggplot(plotdata, aes(x = importance, y = feature, fill = feature)) +
+  geom_density_ridges(aes(height = after_stat(density)), alpha = 0.85, scale = 1.2,
+                      rel_min_height = 0.01, quantile_lines = TRUE, quantiles = 2,
+                      color = darker_green, bandwidth = 0.8, panel_scaling = FALSE,
+                      jittered_points = TRUE, point_size = 0.4, point_alpha = 0.5,
+                      point_color = darker_green) +
+  geom_hline(yintercept = 1:length(unique(plotdata$feature)), color = grid_color, size = 0.3) +
+  geom_vline(xintercept = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 2),
+             color = grid_color, size = 0.3) +
+  geom_vline(xintercept = 0, color ="grey40", linetype ="dashed", size = 0.6) +
+  geom_text(data = feature_medians, aes(x = max_imp + 0.8, y = feature, label = sprintf("%.2f", median_imp)),
+            hjust = 0, size = 3.5, fontface ="bold", color = darker_green) +
+  geom_point(data = feature_medians, aes(x = median_imp, y = feature), size = 3, color = highlight_color, shape = 18) +
+  geom_point(data = feature_medians, aes(x = median_imp, y = feature), size = 5, color = highlight_color,
+             shape = 1, stroke = 1.2, alpha = 0.7) +
+  scale_fill_manual(values = gradient_colors) +
+  scale_x_continuous(limits = c(min(feature_medians$min_imp) - 1, max(feature_medians$max_imp) + 4),
+                     expand = expansion(mult = c(0.02, 0.05)),
+                     breaks = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 1),
+                     minor_breaks = seq(floor(min(plotdata$importance)), ceiling(max(plotdata$importance)), by = 0.5)) +
+  guides(fill ="none") +
+  labs(title ="Ridge Plot of Confirmed Features Importance",
+       subtitle ="Features sorted by median importance with distribution pattern",
+       caption ="Red diamonds show median importance values",
+       x ="Variable Importance", y = NULL) +
+  theme_ridges(font_size = 12, grid = FALSE) +
+  theme(panel.border = element_rect(color ="black", fill = NA, linewidth = 0.8),
+        panel.background = element_rect(fill ="white", color = NA),
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank(),
+        axis.line = element_line(color ="black", size = 0.6),
+        axis.ticks = element_line(color ="black", size = 0.6),
+        axis.text.y = element_text(color = darker_green, face ="bold", size = 10),
+        axis.text.x = element_text(color ="black", size = 9),
+        axis.title.x = element_text(face ="bold", size = 11, margin = margin(t = 10)),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5, margin = margin(b = 10)),
+        plot.subtitle = element_text(hjust = 0.5, color = "grey30", size = 11, margin = margin(b = 15)),
+        plot.caption = element_text(hjust = 1, color = "grey40", size = 9, margin = margin(t = 10)),
+        plot.background = element_rect(fill = "#FAFAFA", color = NA),
+        plot.margin = unit(c(15, 20, 15, 15), "pt"))
+# 显示并保存增强版 Confirmed 特征重要性山脊图
+print(ridge_plot)
+ggsave("enhanced_confirmed_features_ridge.pdf", ridge_plot, width = 12, height = 10)
+
+
+
+
+
+
+#boruta重要性
+boruta.variable.imp <- attStats(fs)
+#导出
+write.table(boruta.variable.imp,'boruta.importance.txt',quote =F,sep="\t",row.names=T)
+#只绘制Confirmed变量
+#提取出Confirmed变量的数据集
+plotdata <- importance_df %>% filter(finalDecision=="Confirmed")
+
+
+
+
+#提取重要的变量
+#boruta.finalVars <- data.frame(Item=getSelectedAttributes(fs, withTentative = F), Type="Boruta")
+##holdHistory = TRUE,则可使用attStats()获取特征的重要性统计信息。
+attStats(fs)
+select.name = getSelectedAttributes(fs) # 获取标记为Confirmed的特征名。
+select.name # 随机森林参数设置不同，结果有明显区别。选择分类正确率高的参数。
+
+boruta.name <- select.name
+#提取筛选出的变量
+newdd <- merge(data_train[1], data_train[select.name], by = "row.names", all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+#导出
+write.table(newdd, file="Boruta_variablelist.txt", sep="\t", quote=F, col.names=T)
+
+
+newddtest <- merge(data_test[1], data_test[select.name], by = "row.names", all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest, file="Boruta_variablelist_test.txt", sep="\t", quote=F, col.names=T)
+#save.image('boruta结果.RData')
+
+
+####2.lasso#####
+data_train$diagnosis <- as.numeric(as.character(data_train$diagnosis))
+#构建模型(第二列开始是自变量)
+x=as.matrix(data_train[,c(2:ncol(data_train)])
+x <- apply(x, 2, as.numeric)
+# 第一列是分组
+y=data_train[,1]
+y <- apply(y, 2, as.numeric)
+#读入包
+library(glmnet)
+library(pROC)
+#构建模型, alpha=1：进行LASSO回归；alpha=0，进行岭回归
+fit=glmnet(x, y, family = "binomial", alpha=1)
+plot(fit, xvar="lambda", label=T)
+#10折交叉验证
+set.seed(1234)
+cvfit=cv.glmnet(x, y, family="binomial", alpha=1, nfolds = 10)
+pdf(file="cvfit.pdf",width=6,height=5.5)
+plot(cvfit)
+dev.off()
+plot(cvfit)
+
+#提取两个λ值：
+lambda.min <- cvfit$lambda.min
+lambda.1se <- cvfit$lambda.1se
+lambda.min
+lambda.1se
+#指定λ值重新构建模型(通过λ值筛选基因)：
+model_lasso_min <- glmnet(x, y, alpha = 1, lambda = lambda.min, family = "binomial")
+model_lasso_1se <- glmnet(x, y, alpha = 1, lambda = lambda.1se, family = "binomial")
+#拎出模型使用的变量(存放在beta中)：
+head(model_lasso_min$beta)#" . "表示这个变量没有被使用
+#使用as.numeric把.转化为0，然后通过筛选非0的方式将构建模型所使用的变量提取出来。
+ID_min <- rownames(model_lasso_min$beta)[as.numeric(model_lasso_min$beta)!=0]
+length(ID_min)
+ID_1se <- rownames(model_lasso_1se$beta)[as.numeric(model_lasso_1se$beta)!=0]
+length(ID_1se)
+#提取基于最小拉姆达值所筛选的变量
+newdd <- data_train[ID_1se]
+#添加分组
+#根据ID,合并
+newdd = merge(data_train$diagnosis, newdd, by = "row.names", all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+library(dplyr)
+newdd <- newdd %>% rename(diagnosis = x)
+out=rbind(ID=colnames(newdd), newdd)
+#导出
+write.table(out, file="Lasso_variablelist_min.txt", sep="\t", quote=F, col.names=F)
+
+
+
+newddtest <- merge(data_test[1], data_test[ID_min], by = "row.names", all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest, file="Lasso_variablelist_test.txt", sep="\t", quote=F, col.names=T)
+save.image('LASSO结果.RData')
+### 取boruta跟LASSO的交集
+intersect.name <- intersect(boruta.name, ID_1se)
+newdd <- data_train[intersect.name]
+
+#添加分组
+#根据ID,合并
+newdd = merge(data_train$diagnosis, newdd, by = "row.names", all = F)
+#第一列变为列名
+rownames(newdd) <- newdd[,1]
+newdd <- newdd[,-1]
+library(dplyr)
+newdd <- newdd %>% rename(diagnosis = x)
+out=rbind(ID=colnames(newdd), newdd)
+#导出
+write.table(out, file="boruta跟LASSO的交集_训练集.txt", sep="\t", quote=F, col.names=F)
+
+intersect.name <- c("age" ,"platelets_max","albumin_min","bun_min",
+       "calcium_min","potassium_min","abs_monocytes_max","abs_neutrophils_min",
+       "pt_max","ptt_max","ld_ldh_min")
+newddtest <- merge(data_test[1], data_test[intersect.name], by = "row.names", all = F)
+#第一列变为列名
+rownames(newddtest) <- newddtest[,1]
+newddtest <- newddtest[,-1]
+#导出
+write.table(newddtest, file="boruta跟LASSO的交集_测试集.txt", sep="\t", quote=F, col.names=T)
+save.image('boruta跟LASSO的交集.RData')
+
+### 二、模型构建######
+library(tidymodels)
+library(probably)
+library(future) # 用于并行计算
+library(ggplot2)
+library(xgboost)
+library(tidymodels)
+library(probably)
+library(future) # 用于并行计算
+library(ggplot2)
+library(kernlab)
+library(tidymodels)
+library(bonsai)
+### begin with DNN
+set.seed(987)
+plan(multisession) 
+cv_folds <- vfold_cv(train_transformed, v = 10, repeats = 20,  strata = diagnosis) 
+
+rec <- 
+  recipe(diagnosis~ ., data = train_transformed)
+rec <- recipe(diagnosis ~ ., data = train_transformed)
+
+nnet_spec <- 
+  mlp(
+    epochs = 1000, 
+    hidden_units = c(32, 8),   # 两层
+    penalty = 0.01,               # L2正则化
+    learn_rate = 0.1              # 学习率
+  ) %>% 
+  set_engine("brulee", validation = 0.2) %>% 
+  set_mode("classification")
+
+nnet_wflow <- 
+  rec  %>% 
+  workflow(nnet_spec)
+
+nnet_fit <- fit(nnet_wflow, train_transformed)
+nnet_fit %>% extract_fit_engine() %>% autoplot()
+dnn_test_preds <- predict(nnet_fit, new_data =test_transformed, type = "prob") %>% # augment() 在这里也适用
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+
+
+
+# 指定 XGBoost 模型 
+xgb_model <- boost_tree(
+  trees = tune(),
+  learn_rate = tune(),
+  tree_depth = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("xgboost") %>% 
+  set_mode("classification") 
+
+xgb_workflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(xgb_model) 
+
+xgb_tuned <- tune_grid(
+  xgb_workflow,
+  resamples = cv_folds,
+  control = control_grid(save_pred = TRUE, verbose = FALSE),
+  metrics = metric_set(brier_class, accuracy, roc_auc)
+) 
+
+autoplot(xgb_tuned) ##保存6*5 in 的pdf
+best_params <- select_best(xgb_tuned, metric = "brier_class") 
+
+final_xgb_workflow <- finalize_workflow(
+  xgb_workflow,
+  best_params
+) 
+
+final_xgb_fit <- fit(final_xgb_workflow, data = train_transformed) 
+
+class_mets <- metric_set(brier_class, roc_auc) 
+
+xgb_test_preds <- predict(final_xgb_fit, test_transformed, type = "prob") %>% # augment() 在这里也适用 
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+
+xgb_recalibrated_mdl <- glm(final_xgb_fit, 
+                             data = test_transformed, family = binomial(link = "logit"))
+
+test_set$xgb_recal_preds <- predict(xgb_recalibrated_mdl , type = "response")
+
+
+# 指定SVM模型，使用径向基核函数（RBF）
+svm_model <- svm_rbf(
+  cost = tune(), # 需要调整的超参数：惩罚因子
+  rbf_sigma = tune() # 需要调整的超参数：核函数的带宽
+) %>% 
+  set_engine("kernlab") %>% 
+  set_mode("classification") 
+
+# 构建工作流 
+svm_workflow <- workflow() %>% 
+  add_recipe(rec) %>% 
+  add_model(svm_model) 
+
+svm_tuned <- tune_grid(
+  svm_workflow, 
+  resamples = cv_folds, 
+  control = control_grid(save_pred = TRUE, verbose = FALSE),
+  metrics = metric_set(brier_class, accuracy, roc_auc) 
+) 
+
+autoplot(svm_tuned) 
+best_params <- select_best(svm_tuned, metric = "brier_class") 
+
+final_svm_workflow <- finalize_workflow( 
+  svm_workflow, 
+  best_params 
+) 
+
+final_svm_fit <- fit(final_svm_workflow, data = train_transformed) 
+class_mets <- metric_set(brier_class, roc_auc) 
+svm_test_preds <- predict(final_svm_fit, test_transformed, type = "prob") %>% 
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+
+#logistic_model
+logistic_model <- logistic_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+logistic_workflow <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(logistic_model)
+logistic_tuned <- tune_grid(
+  logistic_workflow,
+  resamples = cv_folds,
+  control = control_grid(save_pred = TRUE, verbose = FALSE),
+  metrics = metric_set(brier_class, accuracy, roc_auc)
+)
+
+autoplot(logistic_tuned)
+best_params <- select_best(logistic_tuned, metric = "brier_class")
+
+final_logistic_workflow <- finalize_workflow(
+  logistic_workflow,
+  best_params
+)
+
+final_logistic_fit <- fit(final_logistic_workflow, data = train_transformed)
+class_mets <- metric_set(brier_class, roc_auc)
+logistic_preds <- predict(final_logistic_fit, test_transformed, type = "prob") %>%
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+# rf_model
+rf_model <- rand_forest(
+  mtry = tune(),
+  min_n = tune(),
+  trees = 1000
+) %>%
+  set_engine("ranger",  importance = "impurity") %>%
+  set_mode("classification")
+
+# 
+rf_workflow <- workflow() %>%
+  add_recipe(rec) %>%
+  add_model(rf_model)
+
+rf_tuned <- tune_grid(
+  rf_workflow,
+  resamples = cv_folds,
+  control = control_grid(save_pred = TRUE, verbose = FALSE),
+  metrics = metric_set(brier_class, accuracy, roc_auc)
+)
+
+autoplot(rf_tuned)
+best_params <- select_best(rf_tuned, metric = "brier_class")
+final_rf_workflow <- finalize_workflow(
+  rf_workflow,
+  best_params
+)
+final_rf_fit <- fit(final_rf_workflow, data = train_transformed)
+class_mets <- metric_set(brier_class, roc_auc)
+rf_test_preds <- predict(final_rf_fit, test_transformed,type = 'prob') %>% # augment() 在这里也适用
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+
+
+#LightGBM
+lgbm_model <- 
+  boost_tree(
+    mtry = tune(), 
+    trees = tune(), 
+    tree_depth = tune(),
+    learn_rate = tune(), 
+    min_n = tune(), 
+    loss_reduction = tune()
+  ) %>%
+  set_engine("lightgbm", verbose = -1) %>%  # 关闭LightGBM日志
+  set_mode("classification")
+lgbm_workflow <- 
+  workflow() %>%
+  add_recipe(rec) %>%  
+  add_model(lgbm_model)
+
+lgbm_tuned <- tune_grid(
+  object = lgbm_workflow,
+  resamples = cv_folds,
+  grid = 20,  # 添加网格大小（例如20个随机组合）
+  control = control_grid(save_pred = TRUE, verbose = FALSE),
+  metrics = metric_set(brier_class, accuracy, roc_auc)
+)
+
+autoplot(lgbm_tuned)
+best_params <- select_best(lgbm_tuned, metric = "brier_class")
+
+final_lgbm_workflow <- finalize_workflow(
+  lgbm_workflow,
+  best_params
+)
+
+final_lgbm_fit <- fit(final_lgbm_workflow, data = train_transformed)
+class_mets <- metric_set(brier_class, roc_auc)
+lgbm_test_preds <- predict(final_lgbm_fit, test_transformed, type = "prob") %>% # augment() 在这里也适用
+  bind_cols(diagnosis = as.factor(test_transformed$diagnosis))
+
+
+###summary data
+dnn_pred <- dnn_test_preds %>% select(.pred_1) %>% rename(dnn = .pred_1)
+xgb_pred <- xgb_test_preds %>% select(.pred_1) %>% rename(xgb = .pred_1)
+svm_pred <- svm_test_preds %>% select(.pred_1) %>% rename(svm = .pred_1)
+logistic_pred <- logistic_preds %>% select(.pred_1) %>% rename(logistic = .pred_1)
+rf_pred <- rf_test_preds %>% select(.pred_1) %>% rename(rf = .pred_1)
+lgbm_pred <- lgbm_test_preds %>% select(.pred_1) %>% rename(lgbm = .pred_1)
+final_preds <- bind_cols(dnn_pred, xgb_pred, svm_pred, logistic_pred, rf_pred, lgbm_pred) %>% 
+  mutate(diagnosis=dnn_test_preds$diagnosis)
+
+writexl::write_xlsx(final_preds,'20250711.xlsx')
+
